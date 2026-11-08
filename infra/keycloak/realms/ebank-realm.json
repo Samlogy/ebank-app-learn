@@ -14,7 +14,9 @@
   "revokeRefreshToken": true,
   "refreshTokenMaxReuse": 0,
   "eventsEnabled": true,
-  "eventsListeners": ["jboss-logging"],
+  "eventsListeners": [
+    "jboss-logging"
+  ],
   "adminEventsEnabled": true,
   "adminEventsDetailsEnabled": false,
   "smtpServer": {
@@ -25,17 +27,29 @@
   },
   "roles": {
     "realm": [
-      { "name": "CUSTOMER", "description": "Bank customer: only sees their own data" },
-      { "name": "ADMIN", "description": "Bank administrator" },
+      {
+        "name": "CUSTOMER",
+        "description": "Bank customer: only sees their own data"
+      },
+      {
+        "name": "ADMIN",
+        "description": "Bank administrator"
+      },
       {
         "name": "default-roles-ebank",
         "description": "Roles given to every new user",
         "composite": true,
-        "composites": { "realm": ["CUSTOMER"] }
+        "composites": {
+          "realm": [
+            "CUSTOMER"
+          ]
+        }
       }
     ]
   },
-  "defaultRole": { "name": "default-roles-ebank" },
+  "defaultRole": {
+    "name": "default-roles-ebank"
+  },
   "clients": [
     {
       "clientId": "ebank-api",
@@ -55,8 +69,12 @@
       "implicitFlowEnabled": false,
       "directAccessGrantsEnabled": false,
       "serviceAccountsEnabled": false,
-      "redirectUris": ["http://localhost:4200/*"],
-      "webOrigins": ["http://localhost:4200"],
+      "redirectUris": [
+        "http://localhost:4200/*"
+      ],
+      "webOrigins": [
+        "http://localhost:4200"
+      ],
       "attributes": {
         "pkce.code.challenge.method": "S256",
         "post.logout.redirect.uris": "http://localhost:4200/*"
@@ -72,6 +90,133 @@
             "access.token.claim": "true",
             "id.token.claim": "false"
           }
+        }
+      ]
+    }
+  ],
+  "browserFlow": "ebank-browser",
+  "authenticatorConfig": [
+    {
+      "alias": "user-is-admin",
+      "config": {
+        "condUserRole": "ADMIN",
+        "negate": "false"
+      }
+    },
+    {
+      "alias": "user-is-not-admin",
+      "config": {
+        "condUserRole": "ADMIN",
+        "negate": "true"
+      }
+    }
+  ],
+  "authenticationFlows": [
+    {
+      "alias": "ebank-browser",
+      "description": "Browser login: TOTP is required for ADMIN and optional for everyone else",
+      "providerId": "basic-flow",
+      "topLevel": true,
+      "builtIn": false,
+      "authenticationExecutions": [
+        {
+          "authenticator": "auth-cookie",
+          "requirement": "ALTERNATIVE",
+          "priority": 10,
+          "autheticatorFlow": false,
+          "userSetupAllowed": false
+        },
+        {
+          "flowAlias": "ebank-forms",
+          "requirement": "ALTERNATIVE",
+          "priority": 20,
+          "autheticatorFlow": true,
+          "userSetupAllowed": false
+        }
+      ]
+    },
+    {
+      "alias": "ebank-forms",
+      "description": "Password, then TOTP when it applies",
+      "providerId": "basic-flow",
+      "topLevel": false,
+      "builtIn": false,
+      "authenticationExecutions": [
+        {
+          "authenticator": "auth-username-password-form",
+          "requirement": "REQUIRED",
+          "priority": 10,
+          "autheticatorFlow": false,
+          "userSetupAllowed": false
+        },
+        {
+          "flowAlias": "ebank-admin-otp",
+          "requirement": "CONDITIONAL",
+          "priority": 20,
+          "autheticatorFlow": true,
+          "userSetupAllowed": false
+        },
+        {
+          "flowAlias": "ebank-customer-otp",
+          "requirement": "CONDITIONAL",
+          "priority": 30,
+          "autheticatorFlow": true,
+          "userSetupAllowed": false
+        }
+      ]
+    },
+    {
+      "alias": "ebank-admin-otp",
+      "description": "ADMIN must use TOTP, and must set it up on first login",
+      "providerId": "basic-flow",
+      "topLevel": false,
+      "builtIn": false,
+      "authenticationExecutions": [
+        {
+          "authenticator": "conditional-user-role",
+          "requirement": "REQUIRED",
+          "priority": 10,
+          "autheticatorFlow": false,
+          "userSetupAllowed": false,
+          "authenticatorConfig": "user-is-admin"
+        },
+        {
+          "authenticator": "auth-otp-form",
+          "requirement": "REQUIRED",
+          "priority": 20,
+          "autheticatorFlow": false,
+          "userSetupAllowed": false
+        }
+      ]
+    },
+    {
+      "alias": "ebank-customer-otp",
+      "description": "Other users only need TOTP if they set it up",
+      "providerId": "basic-flow",
+      "topLevel": false,
+      "builtIn": false,
+      "authenticationExecutions": [
+        {
+          "authenticator": "conditional-user-role",
+          "requirement": "REQUIRED",
+          "priority": 10,
+          "autheticatorFlow": false,
+          "userSetupAllowed": false,
+          "authenticatorConfig": "user-is-not-admin"
+        },
+        {
+          "authenticator": "conditional-user-configured",
+          "requirement": "REQUIRED",
+          "priority": 20,
+          "autheticatorFlow": false,
+          "userSetupAllowed": false
+        },
+        {
+          "authenticator": "auth-otp-form",
+          "requirement": "REQUIRED",
+          "priority": 30,
+          "autheticatorFlow": false,
+          "userSetupAllowed": false
         }
       ]
     }
