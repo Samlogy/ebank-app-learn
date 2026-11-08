@@ -1,0 +1,140 @@
+<div class="page">
+  <div class="page-header">
+    <h1>Transactions</h1>
+    <button
+      class="btn primary"
+      type="button"
+      [disabled]="senderOptions().length === 0"
+      [title]="senderOptions().length ? '' : 'You need an active account to send money'"
+      (click)="openDialog()"
+    >
+      <app-icon name="send" /> New transfer
+    </button>
+  </div>
+
+  @if (senderOptions().length === 0 && !loading()) {
+    <p class="muted small">You need an active account to send money.</p>
+  }
+
+  <form class="card filters" [formGroup]="filters" (ngSubmit)="applyFilters()" role="search">
+    <label class="field">
+      Account
+      <select formControlName="accountId" (change)="applyFilters()">
+        <option value="">All accounts</option>
+        @for (account of ownAccounts(); track account.accountId) {
+          <option [value]="account.accountId">{{ account.accountId }}</option>
+        }
+      </select>
+    </label>
+    <label class="field">
+      Transaction ID
+      <input formControlName="transactionId" autocomplete="off" spellcheck="false" />
+    </label>
+    <div class="filter-actions">
+      <button class="btn" type="submit">Search</button>
+      @if (hasFilters()) {
+        <button class="btn" type="button" (click)="clearFilters()">Clear</button>
+      }
+    </div>
+  </form>
+
+  @if (error()) {
+    <div class="alert" role="alert">{{ error() }}</div>
+  }
+
+  @if (loading()) {
+    <div class="boot">
+      <div class="spinner" role="status" aria-label="Loading transactions"></div>
+    </div>
+  } @else if (transfers().length === 0 && !error()) {
+    <section class="card empty">
+      <app-icon name="transfer" />
+      @if (hasFilters()) {
+        <h2>No matching transactions</h2>
+        <p>Try a different account or transaction ID.</p>
+      } @else {
+        <h2>No transactions yet</h2>
+        <p>Your transfers will appear here.</p>
+      }
+    </section>
+  } @else {
+    <ul class="card list">
+      @for (transfer of transfers(); track transfer.transactionId) {
+        @let direction = directionOf(transfer);
+        <li [class.cancelled]="transfer.status === 'CANCELLED'">
+          <div class="info">
+            <div class="headline">
+              <strong>{{ title(transfer) }}</strong>
+              @if (transfer.status === 'CANCELLED') {
+                <span class="badge bad">Cancelled</span>
+              } @else if (transfer.status === 'PENDING') {
+                <span class="badge warn">Pending</span>
+              }
+            </div>
+            <div class="mono muted">{{ counterparty(transfer) }}</div>
+            @if (transfer.reference) {
+              <div class="small">{{ transfer.reference }}</div>
+            }
+            <div class="muted small">
+              {{ transfer.createdAt | localDate }} ·
+              <span class="mono">{{ transfer.transactionId }}</span>
+            </div>
+          </div>
+          <div class="amount tabular" [class.in]="direction === 'in'">
+            {{ direction === 'in' ? '+' : direction === 'out' ? '−' : ''
+            }}{{ transfer.amount | money: transfer.currency }}
+          </div>
+        </li>
+      }
+    </ul>
+    <app-pager [page]="page()" [totalPages]="totalPages()" (pageChange)="load($event)" />
+  }
+</div>
+
+<dialog class="modal" #dialog aria-labelledby="transfer-title">
+  <div class="modal-header">
+    <h2 id="transfer-title">New transfer</h2>
+    <button class="icon-btn" type="button" aria-label="Close" (click)="closeDialog()">
+      <app-icon name="close" />
+    </button>
+  </div>
+  <form class="form-grid" [formGroup]="form" (ngSubmit)="submit()" novalidate>
+    <label class="field">
+      From
+      <select formControlName="senderAccountId">
+        @for (account of senderOptions(); track account.accountId) {
+          <option [value]="account.accountId">
+            {{ account.accountId }} ({{ account.currency }})
+          </option>
+        }
+      </select>
+    </label>
+    <label class="field">
+      To account
+      <input formControlName="receiverAccountId" autocomplete="off" spellcheck="false" />
+      @if (form.controls.receiverAccountId.touched && form.controls.receiverAccountId.invalid) {
+        <span class="field-error">Enter the receiving account number.</span>
+      }
+    </label>
+    <label class="field">
+      Amount ({{ senderCurrency() }})
+      <input formControlName="amount" inputmode="decimal" autocomplete="off" />
+      @if (form.controls.amount.touched && form.controls.amount.invalid) {
+        <span class="field-error">
+          {{ form.controls.amount.errors?.['amount'] ?? 'Enter an amount.' }}
+        </span>
+      }
+    </label>
+    <label class="field">
+      Reference (optional)
+      <input formControlName="reference" [maxLength]="maxReferenceLength" autocomplete="off" />
+    </label>
+    @if (dialogError()) {
+      <div class="alert" role="alert">{{ dialogError() }}</div>
+    }
+    <div class="modal-actions">
+      <button class="btn" type="button" (click)="closeDialog()">Cancel</button>
+      <button class="btn primary" type="submit" [disabled]="saving()">Send money</button>
+    </div>
+  </form>
+</dialog>

@@ -116,14 +116,14 @@ services:
       retries: 12
       start_period: 30s
 
-  frontend:
+  front-web:
     profiles: [app]
-    image: ebank-frontend:dev
+    image: ebank-front-web:dev
     build:
-      context: ../../frontend
-      dockerfile: ../infra/docker/frontend/Dockerfile
+      context: ../../front-web
+      dockerfile: ../infra/docker/front-web/Dockerfile
       additional_contexts:
-        docker-config: ../docker/frontend
+        docker-config: ../docker/front-web
     ports:
       - "127.0.0.1:4200:8080"
     healthcheck:

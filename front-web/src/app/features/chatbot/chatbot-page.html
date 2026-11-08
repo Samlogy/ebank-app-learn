@@ -1,0 +1,191 @@
+<div class="chat">
+  <header class="chat-header">
+    <span class="bot-avatar"><app-icon name="bot" /></span>
+    <div>
+      <h1>EBANK Assistant</h1>
+      <p class="muted small">
+        @if (chat.botTyping()) {
+          Typing…
+        } @else if (chat.simulated) {
+          Demo mode: replies are simulated and nothing leaves this browser
+        } @else {
+          Online
+        }
+      </p>
+    </div>
+  </header>
+
+  <div class="log" #log role="log" aria-label="Conversation" aria-live="polite" tabindex="0">
+    @if (chat.messages().length === 0) {
+      <div class="empty">
+        <app-icon name="chat" />
+        <h2>Start a conversation</h2>
+        <p>Send a message, picture, file, voice message or video.</p>
+      </div>
+    }
+
+    @for (message of chat.messages(); track message.id) {
+      <div class="message" [class.mine]="message.from === 'me'">
+        <div class="bubble">
+          @for (attachment of message.attachments; track attachment.id) {
+            @switch (attachment.kind) {
+              @case ('image') {
+                <img [src]="attachment.url" [alt]="attachment.name" (load)="scrollToEnd()" />
+              }
+              @case ('video') {
+                <video
+                  [src]="attachment.url"
+                  controls
+                  playsinline
+                  (loadedmetadata)="scrollToEnd()"
+                  [attr.aria-label]="attachment.name"
+                ></video>
+              }
+              @case ('audio') {
+                <audio [src]="attachment.url" controls [attr.aria-label]="attachment.name"></audio>
+              }
+              @default {
+                <a class="file" [href]="attachment.url" [download]="attachment.name">
+                  <app-icon name="file" />
+                  <span class="file-name">{{ attachment.name }}</span>
+                  <span class="small">{{ formatBytes(attachment.size) }}</span>
+                  <app-icon name="download" />
+                </a>
+              }
+            }
+          }
+          @if (message.text) {
+            <p class="text">{{ message.text }}</p>
+          }
+          <time class="time" [attr.datetime]="message.sentAt">
+            {{ message.sentAt | localDate: 'time' }}
+          </time>
+        </div>
+      </div>
+    }
+
+    @if (chat.botTyping()) {
+      <div class="message">
+        <div class="bubble typing" role="status" aria-label="Assistant is typing">
+          <span></span><span></span><span></span>
+        </div>
+      </div>
+    }
+  </div>
+
+  <div class="composer">
+    @if (error()) {
+      <div class="alert" role="alert">{{ error() }}</div>
+    }
+
+    @if (recorder.mode(); as mode) {
+      <div class="recording">
+        @if (mode === 'video') {
+          <video
+            class="preview"
+            [srcObject]="recorder.stream()"
+            autoplay
+            muted
+            playsinline
+            aria-label="Camera preview"
+          ></video>
+        }
+        <div class="recording-bar">
+          <span class="rec-dot" aria-hidden="true"></span>
+          <span class="tabular" role="timer">
+            Recording {{ mode === 'voice' ? 'voice' : 'video' }} · {{ clock(recorder.seconds()) }}
+          </span>
+          <span class="spacer"></span>
+          <button class="btn small-btn" type="button" (click)="recorder.cancel()">Discard</button>
+          <button class="btn primary small-btn" type="button" (click)="recorder.stop()">
+            Stop
+          </button>
+        </div>
+      </div>
+    } @else {
+      @if (pending().length) {
+        <ul class="pending" aria-label="Attachments to send">
+          @for (attachment of pending(); track attachment.id) {
+            <li>
+              @if (attachment.kind === 'image') {
+                <img [src]="attachment.url" alt="" />
+              } @else {
+                <app-icon
+                  [name]="
+                    attachment.kind === 'video'
+                      ? 'video'
+                      : attachment.kind === 'audio'
+                        ? 'mic'
+                        : 'file'
+                  "
+                />
+              }
+              <span class="file-name small">{{ attachment.name }}</span>
+              <button
+                class="icon-btn remove"
+                type="button"
+                [attr.aria-label]="'Remove ' + attachment.name"
+                (click)="removePending(attachment)"
+              >
+                <app-icon name="close" />
+              </button>
+            </li>
+          }
+        </ul>
+      }
+
+      <div class="input-row">
+        <input
+          #picker
+          class="hidden-input"
+          type="file"
+          multiple
+          tabindex="-1"
+          aria-hidden="true"
+          (change)="onFilesPicked(picker)"
+        />
+        <button
+          class="icon-btn"
+          type="button"
+          aria-label="Attach pictures or files"
+          (click)="picker.click()"
+        >
+          <app-icon name="paperclip" />
+        </button>
+        <button
+          class="icon-btn"
+          type="button"
+          aria-label="Record a voice message"
+          (click)="record('voice')"
+        >
+          <app-icon name="mic" />
+        </button>
+        <button
+          class="icon-btn"
+          type="button"
+          aria-label="Record a video message"
+          (click)="record('video')"
+        >
+          <app-icon name="video" />
+        </button>
+        <textarea
+          rows="1"
+          placeholder="Message"
+          aria-label="Message"
+          [value]="text()"
+          (input)="text.set($any($event.target).value)"
+          (keydown.enter)="onEnter($event)"
+        ></textarea>
+        <button
+          class="btn primary send"
+          type="button"
+          aria-label="Send"
+          [disabled]="!canSend()"
+          (click)="send()"
+        >
+          <app-icon name="send" />
+        </button>
+      </div>
+    }
+  </div>
+</div>

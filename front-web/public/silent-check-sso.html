@@ -1,0 +1,9 @@
+<!doctype html>
+<html>
+  <body>
+    <script>
+      // Loaded in a hidden iframe by keycloak-js to restore the session after a page reload.
+      parent.postMessage(location.href, location.origin);
+    </script>
+  </body>
+</html>

@@ -1,0 +1,65 @@
+<header class="topbar">
+  <a class="brand" routerLink="/account" aria-label="EBANK home"><app-logo /></a>
+
+  <nav class="center-nav" aria-label="Main">
+    @for (item of nav; track item.path) {
+      <a [routerLink]="item.path" routerLinkActive="active" ariaCurrentWhenActive="page">
+        {{ item.label }}
+      </a>
+    }
+  </nav>
+
+  <div class="actions">
+    <a
+      class="icon-btn"
+      routerLink="/notifications"
+      routerLinkActive="active"
+      ariaCurrentWhenActive="page"
+      [attr.aria-label]="unread() ? 'Notifications, ' + unread() + ' unread' : 'Notifications'"
+    >
+      <app-icon name="bell" />
+      @if (unread()) {
+        <span class="count" aria-hidden="true">{{ unreadLabel() }}</span>
+      }
+    </a>
+
+    <button
+      class="icon-btn avatar"
+      type="button"
+      popovertarget="account-menu"
+      aria-label="Profile menu"
+    >
+      <app-icon name="user" />
+    </button>
+
+    <div class="menu" id="account-menu" popover #menu>
+      <div class="menu-user">
+        <strong>{{ auth.user()?.name }}</strong>
+        <span class="muted small">{{ auth.user()?.email }}</span>
+      </div>
+      <a class="menu-item" routerLink="/profile" (click)="closeMenu(menu)">
+        <app-icon name="user" /> Profile
+      </a>
+      <a class="menu-item" routerLink="/notifications" (click)="closeMenu(menu)">
+        <app-icon name="bell" /> Notifications
+      </a>
+      <div class="menu-theme"><app-theme-picker /></div>
+      <button class="menu-item" type="button" (click)="auth.logout()">
+        <app-icon name="logout" /> Log out
+      </button>
+    </div>
+  </div>
+</header>
+
+<main class="content">
+  <router-outlet />
+</main>
+
+<nav class="bottom-nav" aria-label="Main">
+  @for (item of nav; track item.path) {
+    <a [routerLink]="item.path" routerLinkActive="active" ariaCurrentWhenActive="page">
+      <app-icon [name]="item.icon" />
+      <span>{{ item.label }}</span>
+    </a>
+  }
+</nav>

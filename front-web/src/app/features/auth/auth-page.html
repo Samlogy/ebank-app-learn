@@ -1,0 +1,25 @@
+<main class="auth card">
+  <app-logo />
+  <div class="intro">
+    <h1>Banking that stays out of your way</h1>
+    <p class="muted">Sign in to your accounts, or open one in a couple of minutes.</p>
+  </div>
+
+  @if (auth.available()) {
+    <div class="actions">
+      <button class="btn primary" type="button" [disabled]="redirecting()" (click)="start('login')">
+        Sign in
+      </button>
+      <button class="btn" type="button" [disabled]="redirecting()" (click)="start('register')">
+        Create an account
+      </button>
+    </div>
+    <p class="muted small note">
+      <app-icon name="check" />
+      You continue on the secure EBANK sign-in page. Your password never passes through this app.
+    </p>
+  } @else {
+    <p class="alert" role="alert">The sign-in service is unavailable right now.</p>
+    <button class="btn" type="button" (click)="retry()">Try again</button>
+  }
+</main>

@@ -1,0 +1,38 @@
+:host {
+  display: grid;
+  place-items: center;
+  min-height: 100dvh;
+  padding: 1rem;
+  background:
+    radial-gradient(60rem 30rem at 50% -10%, var(--accent-soft), transparent 70%), var(--bg);
+}
+
+.auth {
+  display: grid;
+  gap: 1.5rem;
+  width: min(25rem, 100%);
+  padding: 2rem 1.5rem;
+  box-shadow: var(--shadow-lg);
+}
+
+.intro {
+  display: grid;
+  gap: 0.4rem;
+}
+
+.actions {
+  display: grid;
+  gap: 0.6rem;
+}
+
+.note {
+  display: flex;
+  gap: 0.5rem;
+
+  app-icon {
+    width: 1rem;
+    height: 1rem;
+    margin-top: 0.15rem;
+    color: var(--accent);
+  }
+}

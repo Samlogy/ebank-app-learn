@@ -1,0 +1,50 @@
+<div class="page">
+  <div class="page-header"><h1>Profile</h1></div>
+
+  @if (auth.user(); as user) {
+    <section class="card identity">
+      <div class="big-avatar" aria-hidden="true">{{ initials() }}</div>
+      <div class="who">
+        <h2>{{ user.name }}</h2>
+        <span class="muted">{{ user.email }}</span>
+      </div>
+    </section>
+
+    <section class="card block">
+      <h2>Personal details</h2>
+      <dl>
+        <div>
+          <dt>Email status</dt>
+          <dd>
+            @if (user.emailVerified) {
+              <span class="badge ok">Verified</span>
+            } @else {
+              <span class="badge warn">Not verified</span>
+            }
+          </dd>
+        </div>
+        <div>
+          <dt>Role</dt>
+          <dd>{{ user.roles.join(', ') || '—' }}</dd>
+        </div>
+        <div>
+          <dt>Customer ID</dt>
+          <dd class="mono">{{ user.id }}</dd>
+        </div>
+      </dl>
+      <a class="btn" [href]="accountUrl">
+        Manage name, password and security <app-icon name="external" />
+      </a>
+    </section>
+
+    <section class="card block">
+      <h2>Appearance</h2>
+      <p class="muted small">"Device" follows your phone or computer setting.</p>
+      <app-theme-picker />
+    </section>
+
+    <button class="btn danger logout" type="button" (click)="auth.logout()">
+      <app-icon name="logout" /> Log out
+    </button>
+  }
+</div>

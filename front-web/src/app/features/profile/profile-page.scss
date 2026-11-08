@@ -1,0 +1,65 @@
+.page {
+  max-width: 40rem;
+}
+
+.identity {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+  padding: 1.25rem;
+}
+
+.big-avatar {
+  display: grid;
+  flex: none;
+  place-items: center;
+  width: 4rem;
+  height: 4rem;
+  border-radius: 50%;
+  background: var(--accent-soft);
+  color: var(--accent);
+  font-size: 1.375rem;
+  font-weight: 700;
+}
+
+.who {
+  display: grid;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.block {
+  display: grid;
+  gap: 0.75rem;
+  padding: 1.25rem;
+}
+
+.btn {
+  white-space: normal;
+  padding-block: 0.5rem;
+}
+
+dl {
+  display: grid;
+  gap: 0.75rem;
+  margin: 0;
+
+  div {
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: space-between;
+    gap: 0.25rem 1rem;
+  }
+}
+
+dt {
+  color: var(--text-muted);
+}
+
+dd {
+  margin: 0;
+}
+
+.logout {
+  justify-self: start;
+}

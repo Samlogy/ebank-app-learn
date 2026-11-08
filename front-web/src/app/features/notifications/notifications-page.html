@@ -1,0 +1,59 @@
+<div class="page">
+  <div class="page-header">
+    <h1>Notifications</h1>
+    @if (service.unreadCount()) {
+      <button class="btn" type="button" (click)="service.markAllRead()">
+        <app-icon name="check" /> Mark all as read
+      </button>
+    }
+  </div>
+
+  @if (service.failed()) {
+    <div class="alert" role="alert">
+      Notifications could not be refreshed. Showing the latest we have.
+    </div>
+  }
+
+  @if (!service.loaded()) {
+    <div class="boot">
+      <div class="spinner" role="status" aria-label="Loading notifications"></div>
+    </div>
+  } @else if (service.items().length === 0) {
+    <section class="card empty">
+      <app-icon name="bell" />
+      <h2>You're all caught up</h2>
+      <p>Activity on your accounts will show up here.</p>
+    </section>
+  } @else {
+    <ul class="card list">
+      @for (item of service.items(); track item.id) {
+        @let look = presentation[item.kind];
+        <li [class.unread]="!item.read">
+          <a
+            routerLink="/transactions"
+            [queryParams]="{ transactionId: item.id }"
+            (click)="service.markRead(item.id)"
+          >
+            <span class="glyph {{ look.tone }}"><app-icon [name]="look.icon" /></span>
+            <span class="text">
+              <strong>{{ look.title }}</strong>
+              <span class="tabular">
+                {{ item.amount | money: item.currency }}
+                @if (item.counterparty) {
+                  <span class="muted">
+                    {{ item.kind === 'received' ? 'from' : 'to' }}
+                    <span class="mono">{{ item.counterparty }}</span>
+                  </span>
+                }
+              </span>
+              <span class="muted small">{{ item.createdAt | localDate }}</span>
+            </span>
+            @if (!item.read) {
+              <span class="dot" role="img" aria-label="Unread"></span>
+            }
+          </a>
+        </li>
+      }
+    </ul>
+  }
+</div>
