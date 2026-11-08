@@ -1,0 +1,79 @@
+{
+  "realm": "ebank",
+  "enabled": true,
+  "displayName": "EBANK",
+  "registrationAllowed": true,
+  "registrationEmailAsUsername": true,
+  "loginWithEmailAllowed": true,
+  "duplicateEmailsAllowed": false,
+  "resetPasswordAllowed": true,
+  "verifyEmail": true,
+  "bruteForceProtected": true,
+  "sslRequired": "external",
+  "accessTokenLifespan": 300,
+  "revokeRefreshToken": true,
+  "refreshTokenMaxReuse": 0,
+  "eventsEnabled": true,
+  "eventsListeners": ["jboss-logging"],
+  "adminEventsEnabled": true,
+  "adminEventsDetailsEnabled": false,
+  "smtpServer": {
+    "host": "mailpit",
+    "port": "1025",
+    "from": "noreply@ebank.local",
+    "fromDisplayName": "EBANK"
+  },
+  "roles": {
+    "realm": [
+      { "name": "CUSTOMER", "description": "Bank customer: only sees their own data" },
+      { "name": "ADMIN", "description": "Bank administrator" },
+      {
+        "name": "default-roles-ebank",
+        "description": "Roles given to every new user",
+        "composite": true,
+        "composites": { "realm": ["CUSTOMER"] }
+      }
+    ]
+  },
+  "defaultRole": { "name": "default-roles-ebank" },
+  "clients": [
+    {
+      "clientId": "ebank-api",
+      "name": "EBANK API",
+      "enabled": true,
+      "bearerOnly": true,
+      "publicClient": false,
+      "standardFlowEnabled": false,
+      "directAccessGrantsEnabled": false
+    },
+    {
+      "clientId": "ebank-web",
+      "name": "EBANK web app",
+      "enabled": true,
+      "publicClient": true,
+      "standardFlowEnabled": true,
+      "implicitFlowEnabled": false,
+      "directAccessGrantsEnabled": false,
+      "serviceAccountsEnabled": false,
+      "redirectUris": ["http://localhost:4200/*"],
+      "webOrigins": ["http://localhost:4200"],
+      "attributes": {
+        "pkce.code.challenge.method": "S256",
+        "post.logout.redirect.uris": "http://localhost:4200/*"
+      },
+      "protocolMappers": [
+        {
+          "name": "audience-ebank-api",
+          "protocol": "openid-connect",
+          "protocolMapper": "oidc-audience-mapper",
+          "consentRequired": false,
+          "config": {
+            "included.client.audience": "ebank-api",
+            "access.token.claim": "true",
+            "id.token.claim": "false"
+          }
+        }
+      ]
+    }
+  ]
+}
