@@ -11,4 +11,32 @@
     </parent>
 
     <artifactId>ebank-transactions</artifactId>
+
+    <dependencies>
+        <dependency>
+            <groupId>com.ebank</groupId>
+            <artifactId>ebank-common</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>com.ebank</groupId>
+            <artifactId>ebank-auth</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>com.ebank</groupId>
+            <artifactId>ebank-accounts</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-data-jpa</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>org.mapstruct</groupId>
+            <artifactId>mapstruct</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-test</artifactId>
+            <scope>test</scope>
+        </dependency>
+    </dependencies>
 </project>

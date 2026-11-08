@@ -7,6 +7,13 @@ spring:
     virtual:
       enabled: true
 
+  # Keycloak access tokens. Issuer and key URLs are set per profile.
+  security:
+    oauth2:
+      resourceserver:
+        jwt:
+          audiences: ebank-api
+
   # PostgreSQL + Flyway
   datasource:
     hikari:
@@ -29,6 +36,15 @@ spring:
     redis:
       timeout: 2s
 
+# Everything else under /api needs a token and all other paths are denied.
+# prometheus stays open because scrapers have no user token: keep port 8081 internal in qua and prod.
+ebank:
+  security:
+    public-paths:
+      - /actuator/health/**
+      - /actuator/info
+      - /actuator/prometheus
+
 # API docs
 springdoc:
   api-docs:
@@ -41,7 +57,7 @@ management:
   endpoints:
     web:
       exposure:
-        include: health,info,prometheus
+        include: health,info,prometheus,metrics,loggers
   endpoint:
     health:
       show-details: never

@@ -1,0 +1,6 @@
+package com.ebank.transactions.application;
+
+import com.ebank.transactions.domain.Transfer;
+
+/** {@code replayed} is true when an earlier request with the same idempotency key already did the work. */
+public record TransferResult(Transfer transfer, boolean replayed) {}
