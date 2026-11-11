@@ -1,5 +1,0 @@
--- Start of the migration history. Intentionally has no schema changes.
---
--- Each module keeps its scripts in its own db/migration/<module> folder, but Flyway
--- versions are global across modules. To avoid collisions, name new scripts with a
--- timestamp: V<yyyyMMddHHmm>__<module>_<description>.sql
