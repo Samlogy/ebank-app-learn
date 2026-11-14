@@ -34,7 +34,8 @@ class ModuleBoundariesTest {
 
     @Test
     void modulesOnlyUseTheAuthPublicApi() {
-        noClasses().that().resideInAnyPackage("com.ebank.accounts..", "com.ebank.transactions..", "com.ebank.notifications..")
+        noClasses().that().resideInAnyPackage(
+                        "com.ebank.accounts..", "com.ebank.transactions..", "com.ebank.notifications..", "com.ebank.analytics..")
                 .should().dependOnClassesThat().resideInAPackage("com.ebank.auth.security..")
                 .check(CLASSES);
     }
@@ -43,7 +44,7 @@ class ModuleBoundariesTest {
     void commonDependsOnNoDomainModule() {
         noClasses().that().resideInAPackage("com.ebank.common..")
                 .should().dependOnClassesThat().resideInAnyPackage(
-                        "com.ebank.accounts..", "com.ebank.transactions..", "com.ebank.auth..", "com.ebank.notifications..")
+                        "com.ebank.accounts..", "com.ebank.transactions..", "com.ebank.auth..", "com.ebank.notifications..", "com.ebank.analytics..")
                 .check(CLASSES);
     }
 
@@ -57,6 +58,28 @@ class ModuleBoundariesTest {
                         "com.ebank.transactions.infrastructure..",
                         "com.ebank.transactions.web..",
                         "com.ebank.accounts..")
+                .check(CLASSES);
+    }
+
+    /** Analytics is a read model fed by events: it never reads another module's data directly. */
+    @Test
+    void analyticsOnlyUsesTheTransactionsEvents() {
+        noClasses().that().resideInAPackage("com.ebank.analytics..")
+                .should().dependOnClassesThat().resideInAnyPackage(
+                        "com.ebank.transactions.application..",
+                        "com.ebank.transactions.domain..",
+                        "com.ebank.transactions.infrastructure..",
+                        "com.ebank.transactions.web..",
+                        "com.ebank.accounts..",
+                        "com.ebank.notifications..")
+                .check(CLASSES);
+    }
+
+    @Test
+    void noModuleDependsOnAnalytics() {
+        noClasses().that().resideInAnyPackage(
+                        "com.ebank.accounts..", "com.ebank.transactions..", "com.ebank.notifications..", "com.ebank.common..", "com.ebank.auth..")
+                .should().dependOnClassesThat().resideInAPackage("com.ebank.analytics..")
                 .check(CLASSES);
     }
 

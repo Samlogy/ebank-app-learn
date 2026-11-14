@@ -1,6 +1,7 @@
 package com.ebank.accounts.api;
 
 import java.util.Collection;
+import java.util.List;
 import java.util.Map;
 import java.util.Set;
 
@@ -12,6 +13,13 @@ public interface AccountsApi {
 
     /** All account IDs owned by a user, including closed accounts. */
     Set<String> accountIdsOf(String userId);
+
+    /**
+     * A user's accounts, oldest first, including closed ones. Takes the user explicitly, for callers
+     * running outside a request (such as the chat assistant). Never pass a user ID that did not come
+     * from a verified token.
+     */
+    List<OwnedAccount> accountsOwnedBy(String userId);
 
     /**
      * Locks the accounts until the caller's transaction ends and returns those that exist.

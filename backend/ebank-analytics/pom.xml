@@ -11,4 +11,29 @@
     </parent>
 
     <artifactId>ebank-analytics</artifactId>
+
+    <dependencies>
+        <dependency>
+            <groupId>com.ebank</groupId>
+            <artifactId>ebank-common</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>com.ebank</groupId>
+            <artifactId>ebank-auth</artifactId>
+        </dependency>
+        <!-- Only for the event records in com.ebank.transactions.api. -->
+        <dependency>
+            <groupId>com.ebank</groupId>
+            <artifactId>ebank-transactions</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-elasticsearch</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-test</artifactId>
+            <scope>test</scope>
+        </dependency>
+    </dependencies>
 </project>

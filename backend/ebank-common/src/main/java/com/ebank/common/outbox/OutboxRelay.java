@@ -2,8 +2,10 @@ package com.ebank.common.outbox;
 
 import java.sql.Timestamp;
 import java.time.Instant;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.UUID;
 import java.util.stream.Collectors;
 import org.slf4j.Logger;
@@ -18,12 +20,21 @@ import org.springframework.transaction.support.TransactionTemplate;
 import tools.jackson.databind.json.JsonMapper;
 
 /**
- * Polls the outbox and hands each pending event to the handlers of its type. Each event is
- * handled in its own transaction, so the handlers' writes and the PUBLISHED mark commit together.
- * Rows are claimed with {@code FOR UPDATE SKIP LOCKED}, so several instances can run the relay.
+ * Polls the outbox and hands each pending event to the handlers of its type.
+ *
+ * <ul>
+ *   <li>An event is claimed with a short <em>lease</em> ({@code FOR UPDATE SKIP LOCKED}, then
+ *       {@code next_attempt_at} pushed forward), so several instances can run the relay and no
+ *       database lock is held while handlers run. If an instance dies, the lease runs out and the
+ *       event is picked up again.
+ *   <li>Each handler runs in its own transaction, together with the row in
+ *       {@code outbox_event_handled} that records its success. Handlers are independent: if
+ *       analytics fails, notifications are still committed, and the retry only re-runs analytics.
+ *   <li>The event becomes PUBLISHED once every handler has succeeded.
+ * </ul>
  *
  * <p>This in-process relay stands in for a broker. When Kafka or RabbitMQ arrives, the relay
- * publishes to it instead and the handlers become consumers.
+ * publishes to it instead and each handler becomes a consumer group.
  */
 @Component
 @EnableConfigurationProperties(OutboxProperties.class)
@@ -64,74 +75,104 @@ class OutboxRelay {
 
     /** Returns false when there was nothing left to deliver, or the database is unavailable. */
     boolean relayNext() {
-        PendingEvent[] claimed = new PendingEvent[1];
+        PendingEvent event;
         try {
-            return Boolean.TRUE.equals(tx.execute(status -> {
-                List<PendingEvent> rows = jdbc.query("""
-                        SELECT id, event_type, payload::text AS payload, attempts FROM outbox_event
-                        WHERE status = 'PENDING' AND next_attempt_at <= ?
-                        ORDER BY occurred_at
-                        LIMIT 1
-                        FOR UPDATE SKIP LOCKED
-                        """,
-                        (rs, n) -> new PendingEvent(
-                                rs.getObject("id", UUID.class),
-                                rs.getString("event_type"),
-                                rs.getString("payload"),
-                                rs.getInt("attempts")),
-                        Timestamp.from(Instant.now()));
-                if (rows.isEmpty()) {
-                    return false;
+            event = claimNext();
+        } catch (RuntimeException ex) {
+            log.warn("Outbox poll failed: {}", ex.getClass().getSimpleName());
+            return false;
+        }
+        if (event == null) {
+            return false;
+        }
+
+        RuntimeException failure = null;
+        Set<String> done = alreadyHandled(event.id());
+        for (OutboxEventHandler<?> handler : handlers.getOrDefault(event.type(), List.of())) {
+            if (done.contains(handler.handlerName())) {
+                continue;
+            }
+            try {
+                handleOne(event, handler);
+            } catch (RuntimeException ex) {
+                // The other handlers still run: one failing consumer must not hold back the rest.
+                log.warn("Outbox handler {} failed on event {}: {}",
+                        handler.handlerName(), event.id(), ex.getClass().getName());
+                if (failure == null) {
+                    failure = ex;
                 }
-                claimed[0] = rows.getFirst();
-                dispatch(claimed[0]);
+            }
+        }
+
+        try {
+            if (failure == null) {
                 jdbc.update("""
                         UPDATE outbox_event SET status = 'PUBLISHED', published_at = ?, attempts = attempts + 1, last_error = NULL
                         WHERE id = ?
-                        """, Timestamp.from(Instant.now()), claimed[0].id());
-                return true;
-            }));
-        } catch (RuntimeException ex) {
-            if (claimed[0] == null) {
-                log.warn("Outbox poll failed: {}", ex.getClass().getSimpleName());
-                return false;
+                        """, Timestamp.from(Instant.now()), event.id());
+            } else {
+                recordFailure(event, failure);
             }
-            recordFailure(claimed[0], ex);
-            return true;
+        } catch (RuntimeException ex) {
+            // The lease runs out and the event is retried. Handlers that succeeded are skipped.
+            log.warn("Could not update outbox event {}: {}", event.id(), ex.getClass().getSimpleName());
         }
+        return true;
+    }
+
+    /** One statement, so the row lock lasts only as long as the claim itself. */
+    private PendingEvent claimNext() {
+        Instant now = Instant.now();
+        List<PendingEvent> rows = jdbc.query("""
+                UPDATE outbox_event SET next_attempt_at = ?
+                WHERE id = (
+                    SELECT id FROM outbox_event
+                    WHERE status = 'PENDING' AND next_attempt_at <= ?
+                    ORDER BY occurred_at
+                    LIMIT 1
+                    FOR UPDATE SKIP LOCKED)
+                RETURNING id, event_type, payload::text AS payload, attempts
+                """,
+                (rs, n) -> new PendingEvent(
+                        rs.getObject("id", UUID.class),
+                        rs.getString("event_type"),
+                        rs.getString("payload"),
+                        rs.getInt("attempts")),
+                Timestamp.from(now.plus(properties.lease())),
+                Timestamp.from(now));
+        return rows.isEmpty() ? null : rows.getFirst();
+    }
+
+    private Set<String> alreadyHandled(UUID eventId) {
+        return new HashSet<>(jdbc.queryForList(
+                "SELECT handler FROM outbox_event_handled WHERE event_id = ?", String.class, eventId));
     }
 
     @SuppressWarnings({"unchecked", "rawtypes"})
-    private void dispatch(PendingEvent event) {
-        List<OutboxEventHandler<?>> forType = handlers.getOrDefault(event.type(), List.of());
-        if (forType.isEmpty()) {
-            log.debug("Outbox event {} of type {} has no handler", event.id(), event.type());
-        }
-        for (OutboxEventHandler handler : forType) {
+    private void handleOne(PendingEvent event, OutboxEventHandler handler) {
+        tx.executeWithoutResult(status -> {
             handler.handle(event.id(), json.readValue(event.payload(), handler.payloadType()));
-        }
+            jdbc.update("""
+                    INSERT INTO outbox_event_handled (event_id, handler, handled_at) VALUES (?, ?, ?)
+                    ON CONFLICT DO NOTHING
+                    """, event.id(), handler.handlerName(), Timestamp.from(Instant.now()));
+        });
     }
 
-    /** Runs after the handler's transaction rolled back, so the attempt is recorded on its own. */
     private void recordFailure(PendingEvent event, RuntimeException ex) {
         int attempts = event.attempts() + 1;
         boolean givingUp = attempts >= properties.maxAttempts();
         // Only the exception type: messages can contain row values or personal data.
         String error = ex.getClass().getName();
-        try {
-            jdbc.update("""
-                    UPDATE outbox_event SET status = ?, attempts = ?, next_attempt_at = ?, last_error = ?
-                    WHERE id = ? AND status = 'PENDING'
-                    """,
-                    givingUp ? "FAILED" : "PENDING",
-                    attempts,
-                    Timestamp.from(Instant.now().plus(properties.backoffAfter(attempts))),
-                    error.length() > 255 ? error.substring(0, 255) : error,
-                    event.id());
-        } catch (RuntimeException updateFailure) {
-            log.warn("Could not record the failure of outbox event {}: {}",
-                    event.id(), updateFailure.getClass().getSimpleName());
-        }
+        jdbc.update("""
+                UPDATE outbox_event SET status = ?, attempts = ?, next_attempt_at = ?, last_error = ?
+                WHERE id = ? AND status = 'PENDING'
+                """,
+                givingUp ? "FAILED" : "PENDING",
+                attempts,
+                Timestamp.from(Instant.now().plus(properties.backoffAfter(attempts))),
+                error.length() > 255 ? error.substring(0, 255) : error,
+                event.id());
         if (givingUp) {
             log.error("Outbox event {} of type {} failed {} times and was marked FAILED", event.id(), event.type(), attempts, ex);
         } else {
@@ -142,6 +183,7 @@ class OutboxRelay {
     @Scheduled(fixedDelayString = "${ebank.outbox.cleanup-interval-ms:3600000}", initialDelayString = "${ebank.outbox.cleanup-interval-ms:3600000}")
     void deletePublished() {
         try {
+            // outbox_event_handled rows go with their event (ON DELETE CASCADE).
             int deleted = jdbc.update("DELETE FROM outbox_event WHERE status = 'PUBLISHED' AND published_at < ?",
                     Timestamp.from(Instant.now().minus(properties.retention())));
             if (deleted > 0) {

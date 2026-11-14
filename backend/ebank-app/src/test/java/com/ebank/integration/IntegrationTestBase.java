@@ -33,6 +33,9 @@ import tools.jackson.databind.json.JsonMapper;
             "spring.cache.type=none",
             "management.health.redis.enabled=false",
             "management.health.mail.enabled=false",
+            "management.health.elasticsearch.enabled=false",
+            // No Elasticsearch here: AnalyticsIT starts one and turns the module back on.
+            "ebank.analytics.enabled=false",
             // No Keycloak in these tests: offline users get no email or SMS.
             "ebank.notifications.keycloak.client-secret=",
             "ebank.outbox.poll-interval-ms=100"

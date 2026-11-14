@@ -1,5 +1,8 @@
 package com.ebank.accounts.application;
 
+import org.springframework.data.domain.Sort;
+import org.springframework.data.domain.PageRequest;
+import com.ebank.accounts.api.OwnedAccount;
 import com.ebank.accounts.api.AccountClosingGuard;
 import com.ebank.accounts.api.AccountView;
 import com.ebank.accounts.api.AccountsApi;
@@ -30,6 +33,8 @@ import org.springframework.transaction.annotation.Transactional;
 
 @Service
 public class AccountService implements AccountsApi {
+
+    private static final int MAX_OWNED_ACCOUNTS = 100;
 
     private static final Logger log = LoggerFactory.getLogger(AccountService.class);
 
@@ -131,6 +136,15 @@ public class AccountService implements AccountsApi {
     @Transactional(readOnly = true)
     public Set<String> accountIdsOf(String userId) {
         return Set.copyOf(accounts.findAccountIdsByUserId(userId));
+    }
+
+    @Override
+    @Transactional(readOnly = true)
+    public List<OwnedAccount> accountsOwnedBy(String userId) {
+        return accounts.findByUserId(userId, PageRequest.of(0, MAX_OWNED_ACCOUNTS, Sort.by("createdAt"))).stream()
+                .map(a -> new OwnedAccount(
+                        a.getAccountId(), a.getType().name(), a.getCurrency(), a.getStatus().name(), a.getCreatedAt()))
+                .toList();
     }
 
     @Override

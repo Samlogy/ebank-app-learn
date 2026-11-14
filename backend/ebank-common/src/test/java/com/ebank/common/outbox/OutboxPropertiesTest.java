@@ -7,7 +7,7 @@ import org.junit.jupiter.api.Test;
 
 class OutboxPropertiesTest {
 
-    private final OutboxProperties properties = new OutboxProperties(50, 10, Duration.ofMinutes(15), Duration.ofDays(7));
+    private final OutboxProperties properties = new OutboxProperties(50, 10, Duration.ofMinutes(15), Duration.ofDays(7), Duration.ofMinutes(5));
 
     @Test
     void backoffDoublesAndIsCapped() {

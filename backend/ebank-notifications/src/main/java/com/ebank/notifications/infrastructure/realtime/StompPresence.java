@@ -1,28 +1,21 @@
 package com.ebank.notifications.infrastructure.realtime;
 
 import com.ebank.notifications.application.Presence;
-import org.springframework.messaging.simp.user.SimpUser;
-import org.springframework.messaging.simp.user.SimpUserRegistry;
+import com.ebank.realtime.api.RealtimeMessaging;
 import org.springframework.stereotype.Component;
 
-/**
- * A user is online while they have at least one STOMP session subscribed to their notification queue.
- * Only knows this instance's sessions: several instances need a broker relay and a shared registry.
- */
+/** Online means subscribed to the notification queue, not just connected. */
 @Component
 class StompPresence implements Presence {
 
-    private final SimpUserRegistry users;
+    private final RealtimeMessaging realtime;
 
-    StompPresence(SimpUserRegistry users) {
-        this.users = users;
+    StompPresence(RealtimeMessaging realtime) {
+        this.realtime = realtime;
     }
 
     @Override
     public boolean isOnline(String userId) {
-        SimpUser user = users.getUser(userId);
-        return user != null && user.getSessions().stream()
-                .anyMatch(session -> session.getSubscriptions().stream()
-                        .anyMatch(subscription -> StompSecurityInterceptor.USER_NOTIFICATIONS.equals(subscription.getDestination())));
+        return realtime.isSubscribed(userId, NotificationsQueue.QUEUE);
     }
 }

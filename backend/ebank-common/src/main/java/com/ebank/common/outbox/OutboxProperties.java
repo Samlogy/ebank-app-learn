@@ -9,13 +9,15 @@ import org.springframework.boot.context.properties.bind.DefaultValue;
  * @param maxAttempts after this many failures an event is marked FAILED and left for investigation
  * @param maxBackoff upper bound of the exponential delay between two attempts
  * @param retention how long PUBLISHED events are kept before they are deleted
+ * @param lease how long a claimed event is hidden from other pollers while its handlers run
  */
 @ConfigurationProperties("ebank.outbox")
 record OutboxProperties(
         @DefaultValue("50") int batchSize,
         @DefaultValue("10") int maxAttempts,
         @DefaultValue("15m") Duration maxBackoff,
-        @DefaultValue("7d") Duration retention) {
+        @DefaultValue("7d") Duration retention,
+        @DefaultValue("5m") Duration lease) {
 
     /** 2, 4, 8... seconds after each failure, capped at {@link #maxBackoff}. */
     Duration backoffAfter(int attempts) {

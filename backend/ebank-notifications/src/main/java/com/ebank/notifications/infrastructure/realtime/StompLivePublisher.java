@@ -2,20 +2,20 @@ package com.ebank.notifications.infrastructure.realtime;
 
 import com.ebank.notifications.application.LivePublisher;
 import com.ebank.notifications.application.NotificationView;
-import org.springframework.messaging.simp.SimpMessagingTemplate;
+import com.ebank.realtime.api.RealtimeMessaging;
 import org.springframework.stereotype.Component;
 
 @Component
 class StompLivePublisher implements LivePublisher {
 
-    private final SimpMessagingTemplate messaging;
+    private final RealtimeMessaging realtime;
 
-    StompLivePublisher(SimpMessagingTemplate messaging) {
-        this.messaging = messaging;
+    StompLivePublisher(RealtimeMessaging realtime) {
+        this.realtime = realtime;
     }
 
     @Override
     public void push(String userId, NotificationView notification) {
-        messaging.convertAndSendToUser(userId, WebSocketConfig.NOTIFICATIONS_DESTINATION, notification);
+        realtime.send(userId, NotificationsQueue.QUEUE, notification);
     }
 }

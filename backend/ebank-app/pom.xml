@@ -18,6 +18,7 @@
         <dependency><groupId>com.ebank</groupId><artifactId>ebank-auth</artifactId></dependency>
         <dependency><groupId>com.ebank</groupId><artifactId>ebank-accounts</artifactId></dependency>
         <dependency><groupId>com.ebank</groupId><artifactId>ebank-transactions</artifactId></dependency>
+        <dependency><groupId>com.ebank</groupId><artifactId>ebank-realtime</artifactId></dependency>
         <dependency><groupId>com.ebank</groupId><artifactId>ebank-notifications</artifactId></dependency>
         <dependency><groupId>com.ebank</groupId><artifactId>ebank-analytics</artifactId></dependency>
         <dependency><groupId>com.ebank</groupId><artifactId>ebank-chatbot</artifactId></dependency>

@@ -36,6 +36,11 @@ spring:
     redis:
       timeout: 2s
 
+  # Analytics store. Analytics indices are separate from log indices.
+  elasticsearch:
+    connection-timeout: 2s
+    socket-timeout: 5s
+
   # Fallback emails for offline users. The host is set per profile: no host, no email channel.
   mail:
     properties:
@@ -59,6 +64,10 @@ ebank:
     max-attempts: 10
     max-backoff: 15m
     retention: 7d
+    lease: 5m
+  analytics:
+    enabled: true
+    index: ebank-transactions    # alias over ebank-transactions-v1
   notifications:
     email:
       from: "EBANK <noreply@ebank.local>"
