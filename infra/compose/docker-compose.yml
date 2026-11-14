@@ -3,6 +3,7 @@
 #
 #   docker compose up -d --wait                  infrastructure only
 #   docker compose --profile app up -d --build --wait    infrastructure, backend and frontend
+#   docker compose --profile observability up -d --wait  adds Prometheus, Grafana, OTel, Jaeger, Logstash, Filebeat, Kibana
 # A unique name: "ebank" and "ebank-app" are used by older stacks on this machine,
 # and sharing a project name means sharing their volumes.
 name: ebank-modular
@@ -122,6 +123,12 @@ services:
       MAIL_HOST: mailpit
       ELASTICSEARCH_URIS: http://elasticsearch:9200
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}    # empty: scripted assistant
+      # ECS JSON logs for Filebeat, traces to the collector (both used by --profile observability).
+      LOGGING_STRUCTURED_FORMAT_CONSOLE: ecs
+      OTLP_TRACES_ENABLED: ${OTLP_TRACES_ENABLED:-false}
+      OTLP_TRACES_ENDPOINT: http://otel-collector:4318/v1/traces
+    labels:
+      co.elastic.logs/enabled: "true"
     ports:
       - "127.0.0.1:8080:8080"
     depends_on:
@@ -158,7 +165,117 @@ services:
       timeout: 3s
       retries: 6
 
+  # ---------------------------------------------------------------- observability (local only)
+
+  prometheus:
+    profiles: [observability]
+    image: prom/prometheus:v3.7.3
+    command: ["--config.file=/etc/prometheus/prometheus.yml", "--storage.tsdb.retention.time=7d", "--web.enable-lifecycle"]
+    volumes:
+      - ../observability/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ../observability/prometheus/rules:/etc/prometheus/rules:ro
+      - prometheus-data:/prometheus
+    extra_hosts:
+      - "host.docker.internal:host-gateway"    # scrapes a backend started with spring-boot:run
+    ports:
+      - "127.0.0.1:9090:9090"
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:9090/-/ready"]
+      interval: 10s
+      timeout: 3s
+      retries: 12
+
+  grafana:
+    profiles: [observability]
+    image: grafana/grafana:12.2.1
+    environment:
+      GF_SECURITY_ADMIN_USER: ${GRAFANA_ADMIN_USER:-admin}
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:-admin}
+      GF_USERS_ALLOW_SIGN_UP: "false"
+      GF_ANALYTICS_REPORTING_ENABLED: "false"
+    volumes:
+      - ../observability/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ../observability/grafana/dashboards:/var/lib/grafana/dashboards:ro
+      - grafana-data:/var/lib/grafana
+    ports:
+      - "127.0.0.1:3000:3000"
+    depends_on:
+      prometheus:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:3000/api/health | grep -q ok"]
+      interval: 10s
+      timeout: 3s
+      retries: 12
+
+  otel-collector:
+    profiles: [observability]
+    image: otel/opentelemetry-collector-contrib:0.139.0
+    command: ["--config=/etc/otelcol/config.yml"]
+    volumes:
+      - ../observability/otel/otel-collector.yml:/etc/otelcol/config.yml:ro
+    ports:
+      - "127.0.0.1:4317:4317"    # OTLP gRPC
+      - "127.0.0.1:4318:4318"    # OTLP HTTP: the backend on the host sends here
+    depends_on:
+      - jaeger
+
+  jaeger:
+    profiles: [observability]
+    image: jaegertracing/jaeger:2.11.0
+    ports:
+      - "127.0.0.1:16686:16686"  # UI
+
+  logstash:
+    profiles: [observability]
+    image: docker.elastic.co/logstash/logstash:9.4.8
+    environment:
+      LS_JAVA_OPTS: -Xms256m -Xmx256m
+      ELASTICSEARCH_HOSTS: http://elasticsearch:9200
+    volumes:
+      - ../observability/elk/logstash/logstash.yml:/usr/share/logstash/config/logstash.yml:ro
+      - ../observability/elk/logstash/pipeline:/usr/share/logstash/pipeline:ro
+    depends_on:
+      elasticsearch:
+        condition: service_healthy
+
+  filebeat:
+    profiles: [observability]
+    image: docker.elastic.co/beats/filebeat:9.4.8
+    # Reads other containers' logs: needs root and the Docker socket. Local development only.
+    user: root
+    command: ["filebeat", "-e", "--strict.perms=false"]
+    volumes:
+      - ../observability/elk/filebeat/filebeat.yml:/usr/share/filebeat/filebeat.yml:ro
+      - /var/lib/docker/containers:/var/lib/docker/containers:ro
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    depends_on:
+      - logstash
+
+  kibana:
+    profiles: [observability]
+    image: docker.elastic.co/kibana/kibana:9.4.8
+    volumes:
+      - ../observability/elk/kibana/kibana.yml:/usr/share/kibana/config/kibana.yml:ro
+    ports:
+      - "127.0.0.1:5601:5601"
+    depends_on:
+      elasticsearch:
+        condition: service_healthy
+
+  kibana-setup:
+    profiles: [observability]
+    image: curlimages/curl:8.17.0
+    entrypoint: ["/bin/sh", "/setup.sh"]
+    volumes:
+      - ../observability/elk/kibana/setup.sh:/setup.sh:ro
+    depends_on:
+      - kibana
+    restart: "no"
+
 volumes:
+  prometheus-data:
+  grafana-data:
   elasticsearch-data:
   postgres-data:
   keycloak-db-data:

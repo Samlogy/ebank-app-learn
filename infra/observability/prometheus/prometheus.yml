@@ -1,0 +1,31 @@
+# Local Prometheus. In k3s the same jobs come from pod annotations (see infra/k3s).
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+  external_labels:
+    environment: dev
+
+rule_files:
+  - /etc/prometheus/rules/*.yml
+
+scrape_configs:
+  # The backend in docker compose (--profile app)...
+  - job_name: ebank-backend
+    metrics_path: /actuator/prometheus
+    static_configs:
+      - targets: ["backend:8080"]
+        labels: { service: ebank-backend, runs_in: compose }
+  # ...or started on the host with ./mvnw spring-boot:run. One of the two is down at any time.
+  - job_name: ebank-backend-host
+    metrics_path: /actuator/prometheus
+    static_configs:
+      - targets: ["host.docker.internal:8080"]
+        labels: { service: ebank-backend, runs_in: host }
+
+  - job_name: otel-collector
+    static_configs:
+      - targets: ["otel-collector:8888"]
+
+  - job_name: prometheus
+    static_configs:
+      - targets: ["localhost:9090"]

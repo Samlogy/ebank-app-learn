@@ -1,0 +1,92 @@
+# Alerts on symptoms users or operators would notice. Metric names follow Micrometer's
+# Prometheus naming: dots become underscores, timers get _seconds, counters _total.
+groups:
+  - name: ebank-availability
+    rules:
+      - alert: EbankBackendDown
+        # Two scrape jobs exist (compose and host): only alert when neither answers.
+        expr: max(up{service="ebank-backend"}) == 0
+        for: 2m
+        labels: { severity: critical }
+        annotations:
+          summary: The EBANK backend is not answering Prometheus scrapes
+          description: No ebank-backend target has been up for 2 minutes.
+
+      - alert: EbankHighErrorRate
+        expr: |
+          sum(rate(http_server_requests_seconds_count{service="ebank-backend", status=~"5.."}[5m]))
+            / sum(rate(http_server_requests_seconds_count{service="ebank-backend"}[5m])) > 0.05
+        for: 5m
+        labels: { severity: critical }
+        annotations:
+          summary: More than 5% of API requests fail with a 5xx
+          description: "{{ $value | humanizePercentage }} of requests returned a server error over 5 minutes."
+
+      - alert: EbankSlowRequests
+        expr: |
+          histogram_quantile(0.95, sum by (le) (rate(http_server_requests_seconds_bucket{service="ebank-backend", uri!~"/actuator.*"}[5m]))) > 1
+        for: 10m
+        labels: { severity: warning }
+        annotations:
+          summary: 95th percentile API latency is above 1 s
+          description: "p95 latency is {{ $value | humanizeDuration }}."
+
+      - alert: EbankHeapAlmostFull
+        expr: |
+          sum by (instance) (jvm_memory_used_bytes{service="ebank-backend", area="heap"})
+            / sum by (instance) (jvm_memory_max_bytes{service="ebank-backend", area="heap"}) > 0.9
+        for: 10m
+        labels: { severity: warning }
+        annotations:
+          summary: JVM heap above 90% on {{ $labels.instance }}
+
+  - name: ebank-security
+    rules:
+      - alert: EbankAuthRejectionSpike
+        # Many 401/403 in a short time: a misconfigured client, an expired realm key, or someone probing.
+        expr: sum by (status) (rate(ebank_security_rejections_total[5m])) > 5
+        for: 5m
+        labels: { severity: warning }
+        annotations:
+          summary: Unusually many {{ $labels.status }} responses
+          description: "{{ $value | humanize }} rejections per second over 5 minutes."
+
+  - name: ebank-events
+    rules:
+      - alert: EbankOutboxBacklog
+        expr: ebank_outbox_events{status="PENDING"} > 100 or ebank_outbox_oldest_pending_seconds > 300
+        for: 5m
+        labels: { severity: warning }
+        annotations:
+          summary: Domain events are not being delivered
+          description: Notifications and analytics are falling behind. Check the outbox relay and the handlers' dependencies (SMTP, Keycloak, Elasticsearch).
+
+      - alert: EbankOutboxEventsFailed
+        expr: ebank_outbox_events{status="FAILED"} > 0
+        labels: { severity: warning }
+        annotations:
+          summary: "{{ $value }} outbox event(s) gave up after too many attempts"
+          description: "Find them with SELECT * FROM outbox_event WHERE status = 'FAILED', fix the cause, then set them back to PENDING."
+
+      - alert: EbankNotificationDeliveryFailing
+        expr: sum(increase(ebank_notifications_delivered_total{outcome="failed"}[15m])) > 5
+        labels: { severity: warning }
+        annotations:
+          summary: Notifications fail to be delivered (live push, email or SMS)
+
+  - name: ebank-chat
+    rules:
+      - alert: EbankAssistantUnavailable
+        expr: sum(increase(ebank_chatbot_assistant_replies_total{outcome=~"unavailable|failed"}[10m])) > 3
+        labels: { severity: warning }
+        annotations:
+          summary: The chat assistant cannot answer (LLM errors or timeouts)
+          description: Customers get the fallback message. Check the Anthropic API key, quota and status.
+
+      - alert: EbankAdvisorQueueSlow
+        expr: |
+          rate(ebank_chatbot_queue_wait_seconds_sum[30m]) / rate(ebank_chatbot_queue_wait_seconds_count[30m]) > 600
+        for: 15m
+        labels: { severity: warning }
+        annotations:
+          summary: Customers wait more than 10 minutes on average for an advisor

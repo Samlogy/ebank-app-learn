@@ -1,0 +1,29 @@
+apiVersion: 1
+
+datasources:
+  - name: Prometheus
+    uid: prometheus
+    type: prometheus
+    access: proxy
+    url: http://prometheus:9090
+    isDefault: true
+    jsonData:
+      timeInterval: 15s
+
+  - name: Jaeger
+    uid: jaeger
+    type: jaeger
+    access: proxy
+    url: http://jaeger:16686
+
+  # Logs shipped by Filebeat and Logstash. Analytics indices (ebank-transactions*) are not exposed here.
+  - name: Logs
+    uid: logs
+    type: elasticsearch
+    access: proxy
+    url: http://elasticsearch:9200
+    jsonData:
+      index: ebank-logs-*
+      timeField: "@timestamp"
+      logMessageField: message
+      logLevelField: log.level

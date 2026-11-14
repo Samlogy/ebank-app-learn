@@ -1,0 +1,4 @@
+server.name: ebank-kibana
+server.host: 0.0.0.0
+elasticsearch.hosts: ["http://elasticsearch:9200"]
+telemetry.optIn: false
