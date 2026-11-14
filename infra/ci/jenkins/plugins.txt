@@ -1,0 +1,11 @@
+# Jenkins plugins the pipeline uses (jenkins-plugin-cli --plugin-file plugins.txt).
+workflow-aggregator
+pipeline-stage-view
+git
+docker-workflow
+credentials-binding
+sonar
+junit
+timestamper
+ws-cleanup
+warnings-ng

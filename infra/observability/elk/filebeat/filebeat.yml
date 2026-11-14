@@ -1,19 +1,30 @@
-# Ships the logs of containers labelled co.elastic.logs/enabled=true (the backend) to Logstash.
+# Ships the logs of containers labelled ebank-logs=true (the backend) to Logstash.
 # The backend writes ECS JSON lines to stdout in qua and prod, and in compose (LOGGING_STRUCTURED_FORMAT_CONSOLE).
 filebeat.autodiscover:
   providers:
     - type: docker
-      hints.enabled: true
-      hints.default_config.enabled: false
+      templates:
+        - condition:
+            equals:
+              docker.container.labels.ebank-logs: "true"
+          config:
+            - type: filestream
+              id: container-${data.docker.container.id}
+              paths:
+                - /var/lib/docker/containers/${data.docker.container.id}/*.log
+              prospector.scanner.symlinks: true
+              parsers:
+                - container: ~
 
 processors:
   - add_docker_metadata: ~
   # Keep only what is useful to find a container's logs.
   - drop_fields:
-      fields: ["agent", "ecs.version", "host", "input", "log.file", "stream", "container.labels"]
+      fields: ["agent", "ecs.version", "host", "input", "log.file", "log.offset", "stream", "container.labels"]
       ignore_missing: true
 
 output.logstash:
   hosts: ["logstash:5044"]
 
-logging.level: warning
+logging.level: info
+logging.metrics.enabled: false

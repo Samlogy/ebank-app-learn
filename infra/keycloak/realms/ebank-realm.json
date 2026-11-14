@@ -58,7 +58,7 @@
     {
       "clientId": "ebank-notifications",
       "name": "EBANK notifications (service account)",
-      "description": "Backend only: reads email and phone of offline users, and lists advisors for queue alerts (view-users, view-realm). kc-admin-api is required by Keycloak 26.8+ to call the Admin API. The secret is for local dev; set a different one in every other environment.",
+      "description": "Backend only: reads offline users' email and phone, and lists advisors for queue alerts. Dev secret: set another one outside dev.",
       "enabled": true,
       "publicClient": false,
       "clientAuthenticatorType": "client-secret",
@@ -93,14 +93,16 @@
       "directAccessGrantsEnabled": false,
       "serviceAccountsEnabled": false,
       "redirectUris": [
-        "http://localhost:4200/*"
+        "http://localhost:4200/*",
+        "http://app.ebank.localhost/*"
       ],
       "webOrigins": [
-        "http://localhost:4200"
+        "http://localhost:4200",
+        "http://app.ebank.localhost"
       ],
       "attributes": {
         "pkce.code.challenge.method": "S256",
-        "post.logout.redirect.uris": "http://localhost:4200/*"
+        "post.logout.redirect.uris": "http://localhost:4200/*##http://app.ebank.localhost/*"
       },
       "protocolMappers": [
         {

@@ -1,0 +1,65 @@
+# One replica on purpose: the STOMP broker, user presence and the assistant's per-conversation
+# locks are in memory. Several replicas need a broker relay (RabbitMQ STOMP) and sticky sessions first.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: backend
+  labels: { app.kubernetes.io/name: backend }
+spec:
+  replicas: 1
+  strategy:
+    type: RollingUpdate
+    rollingUpdate: { maxSurge: 1, maxUnavailable: 0 }
+  selector:
+    matchLabels: { app.kubernetes.io/name: backend }
+  template:
+    metadata:
+      labels: { app.kubernetes.io/name: backend }
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "8081"
+        prometheus.io/path: /actuator/prometheus
+    spec:
+      terminationGracePeriodSeconds: 40
+      # No Docker-link variables: the "redis" Service would set REDIS_PORT=tcp://..., which Spring reads as its port.
+      enableServiceLinks: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+        seccompProfile: { type: RuntimeDefault }
+      containers:
+        - name: backend
+          image: ebank-backend
+          envFrom:
+            - configMapRef: { name: ebank-backend-config }
+            - secretRef: { name: ebank-backend-secrets }
+          ports:
+            - { name: http, containerPort: 8080 }
+            - { name: management, containerPort: 8081 }   # actuator, never routed by the ingress
+          startupProbe:
+            httpGet: { path: /actuator/health/liveness, port: management }
+            periodSeconds: 5
+            failureThreshold: 36
+          livenessProbe:
+            httpGet: { path: /actuator/health/liveness, port: management }
+            periodSeconds: 10
+          readinessProbe:
+            httpGet: { path: /actuator/health/readiness, port: management }
+            periodSeconds: 5
+          lifecycle:
+            # Gives the ingress time to stop routing here before Spring starts its graceful shutdown.
+            preStop:
+              sleep: { seconds: 5 }
+          resources:
+            requests: { cpu: 500m, memory: 768Mi }
+            limits: { memory: 1Gi }
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: { drop: ["ALL"] }
+          volumeMounts:
+            - { name: tmp, mountPath: /tmp }
+      volumes:
+        - name: tmp
+          emptyDir: {}

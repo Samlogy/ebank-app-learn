@@ -1,0 +1,16 @@
+# Accepted Trivy findings. Each entry says why; review them when the reason no longer holds.
+# Paths are relative to the scanned folder: infra/ for files, reports/k3s-rendered/ for manifests.
+misconfigurations:
+  - id: DS002
+    paths: ["ci/jenkins/agent.Dockerfile"]
+    statement: >-
+      The CI agent image has no USER on purpose. Jenkins starts it with the build user (-u uid:gid)
+      and the Docker group, which is what the mounted socket needs.
+  - id: KSV014
+    paths: ["*-deployment-keycloak.yaml"]
+    statement: >-
+      Keycloak in "start" mode writes into its installation directory (build of the optimized
+      server). Hardened by non-root, no privilege escalation and all capabilities dropped.
+  - id: KSV014
+    paths: ["dev-statefulset-elasticsearch.yaml"]
+    statement: Dev-only Elasticsearch writes its keystore under its config directory. qua and prod use a managed one.

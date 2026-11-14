@@ -35,6 +35,9 @@
         <mapstruct.version>1.6.3</mapstruct.version>
         <archunit.version>1.5.1</archunit.version>
         <anthropic-java.version>3.3.0</anthropic-java.version>
+        <jacoco.version>0.8.14</jacoco.version>
+        <cyclonedx.version>2.9.1</cyclonedx.version>
+        <sonar-maven-plugin.version>5.2.0.4988</sonar-maven-plugin.version>
     </properties>
 
     <dependencyManagement>
@@ -101,6 +104,61 @@
             </dependency>
         </dependencies>
     </dependencyManagement>
+
+    <!-- CI only (mvn -Pci): coverage for SonarQube and a CycloneDX SBOM. Local builds stay as they are. -->
+    <profiles>
+        <profile>
+            <id>ci</id>
+            <properties>
+                <sonar.projectKey>ebank-backend</sonar.projectKey>
+                <sonar.projectName>EBANK backend</sonar.projectName>
+                <!-- Unit and integration tests together, aggregated in ebank-app. -->
+                <sonar.coverage.jacoco.xmlReportPaths>${maven.multiModuleProjectDirectory}/ebank-app/target/site/jacoco-aggregate/jacoco.xml</sonar.coverage.jacoco.xmlReportPaths>
+            </properties>
+            <build>
+                <pluginManagement>
+                    <plugins>
+                        <plugin>
+                            <groupId>org.sonarsource.scanner.maven</groupId>
+                            <artifactId>sonar-maven-plugin</artifactId>
+                            <version>${sonar-maven-plugin.version}</version>
+                        </plugin>
+                    </plugins>
+                </pluginManagement>
+                <plugins>
+                    <plugin>
+                        <groupId>org.jacoco</groupId>
+                        <artifactId>jacoco-maven-plugin</artifactId>
+                        <version>${jacoco.version}</version>
+                        <executions>
+                            <execution>
+                                <id>unit-tests</id>
+                                <goals><goal>prepare-agent</goal></goals>
+                            </execution>
+                            <execution>
+                                <id>integration-tests</id>
+                                <goals><goal>prepare-agent-integration</goal></goals>
+                            </execution>
+                        </executions>
+                    </plugin>
+                    <!-- Spring Boot's parent configures the output: target/classes/META-INF/sbom/application.cdx.json.
+                         Needs online mode: an offline build (mvn -o) silently skips it. -->
+                    <plugin>
+                        <groupId>org.cyclonedx</groupId>
+                        <artifactId>cyclonedx-maven-plugin</artifactId>
+                        <version>${cyclonedx.version}</version>
+                        <inherited>false</inherited>
+                        <executions>
+                            <execution>
+                                <phase>package</phase>
+                                <goals><goal>makeAggregateBom</goal></goals>
+                            </execution>
+                        </executions>
+                    </plugin>
+                </plugins>
+            </build>
+        </profile>
+    </profiles>
 
     <build>
         <plugins>

@@ -1,0 +1,69 @@
+# One PostgreSQL for the app (database "ebank") and Keycloak (database "keycloak").
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: postgres
+  labels: { app.kubernetes.io/name: postgres }
+spec:
+  serviceName: postgres
+  replicas: 1
+  selector:
+    matchLabels: { app.kubernetes.io/name: postgres }
+  template:
+    metadata:
+      labels: { app.kubernetes.io/name: postgres }
+    spec:
+      # No Docker-link variables: a Service named "redis" would set REDIS_PORT=tcp://..., which Spring reads.
+      enableServiceLinks: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 70        # postgres in the alpine image
+        fsGroup: 70
+        seccompProfile: { type: RuntimeDefault }
+      containers:
+        - name: postgres
+          image: postgres:18.6-alpine
+          ports:
+            - { name: postgres, containerPort: 5432 }
+          env:
+            - { name: POSTGRES_DB, value: ebank }
+            - name: POSTGRES_USER
+              valueFrom: { secretKeyRef: { name: ebank-postgres, key: POSTGRES_USER } }
+            - name: POSTGRES_PASSWORD
+              valueFrom: { secretKeyRef: { name: ebank-postgres, key: POSTGRES_PASSWORD } }
+            - name: KEYCLOAK_DB_PASSWORD
+              valueFrom: { secretKeyRef: { name: ebank-postgres, key: KEYCLOAK_DB_PASSWORD } }
+            - { name: PGDATA, value: /var/lib/postgresql/18/data }
+          volumeMounts:
+            - { name: data, mountPath: /var/lib/postgresql }
+            - { name: init, mountPath: /docker-entrypoint-initdb.d, readOnly: true }
+            - { name: run, mountPath: /var/run/postgresql }
+            - { name: tmp, mountPath: /tmp }
+          readinessProbe:
+            exec: { command: ["sh", "-c", "pg_isready -U \"$POSTGRES_USER\" -d ebank"] }
+            periodSeconds: 5
+          livenessProbe:
+            exec: { command: ["sh", "-c", "pg_isready -U \"$POSTGRES_USER\" -d ebank"] }
+            initialDelaySeconds: 30
+            periodSeconds: 10
+          resources:
+            requests: { cpu: 100m, memory: 256Mi }
+            limits: { memory: 1Gi }
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true     # writes only to the data volume, /tmp and the socket directory
+            capabilities: { drop: ["ALL"] }
+      volumes:
+        - name: init
+          configMap: { name: postgres-init }
+        - name: run
+          emptyDir: {}
+        - name: tmp
+          emptyDir: {}
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        resources:
+          requests: { storage: 5Gi }

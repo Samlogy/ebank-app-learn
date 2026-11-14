@@ -1,0 +1,13 @@
+# Runs once, on an empty data volume.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: postgres-init
+data:
+  10-keycloak.sh: |
+    #!/bin/sh
+    set -eu
+    psql -v ON_ERROR_STOP=1 -U "$POSTGRES_USER" -d ebank <<SQL
+    CREATE USER keycloak WITH PASSWORD '$KEYCLOAK_DB_PASSWORD';
+    CREATE DATABASE keycloak OWNER keycloak;
+    SQL

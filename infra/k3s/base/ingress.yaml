@@ -1,0 +1,28 @@
+# Traefik, which k3s ships with. WebSocket upgrades on /ws work without extra configuration.
+# /actuator is not routed: it is only reachable inside the cluster.
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: ebank
+  annotations:
+    traefik.ingress.kubernetes.io/router.entrypoints: websecure
+    traefik.ingress.kubernetes.io/router.tls: "true"
+spec:
+  ingressClassName: traefik
+  tls:
+    - hosts: [app.ebank.example, api.ebank.example, auth.ebank.example]
+      secretName: ebank-tls
+  rules:
+    - host: app.ebank.example
+      http:
+        paths:
+          - { path: /, pathType: Prefix, backend: { service: { name: front-web, port: { name: http } } } }
+    - host: api.ebank.example
+      http:
+        paths:
+          - { path: /api, pathType: Prefix, backend: { service: { name: backend, port: { name: http } } } }
+          - { path: /ws, pathType: Exact, backend: { service: { name: backend, port: { name: http } } } }
+    - host: auth.ebank.example
+      http:
+        paths:
+          - { path: /, pathType: Prefix, backend: { service: { name: keycloak, port: { name: http } } } }

@@ -11,4 +11,6 @@ RUN npm run build
 FROM nginxinc/nginx-unprivileged:1.30.6-alpine
 COPY --from=docker-config nginx.conf /etc/nginx/conf.d/default.conf
 COPY --from=build /workspace/dist/ebank-web/browser/ /usr/share/nginx/html/
+# Already the base image's user; stated here so scanners and readers don't have to know that.
+USER 101
 EXPOSE 8080

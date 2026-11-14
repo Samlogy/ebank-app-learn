@@ -1,0 +1,184 @@
+// EBANK pipeline. In the Jenkins job, set "Script Path" to infra/ci/jenkins/Jenkinsfile.
+//
+// Needs, configured in Jenkins:
+//   - a SonarQube server named "sonarqube" (Manage Jenkins > System) with its webhook back to Jenkins
+//   - credentials: "dockerhub" (username + access token), "kubeconfig-dev" (secret file)
+//   - agents that can reach the host's Docker socket (Testcontainers, image builds, scanners)
+//
+// Every branch: secrets scan, build and tests, SonarQube quality gate, SAST, IaC and dependency
+// scans, image build and scan. master also pushes the images, deploys to k3s dev and runs DAST.
+
+pipeline {
+    agent {
+        dockerfile {
+            dir 'infra/ci/jenkins'
+            filename 'agent.Dockerfile'
+            // Same path inside and outside the agent, so dockerized tools can mount the workspace.
+            args '-v /var/run/docker.sock:/var/run/docker.sock --group-add docker --add-host=host.docker.internal:host-gateway -v $HOME/.m2:/root/.m2 -v $HOME/.npm:/root/.npm'
+        }
+    }
+
+    options {
+        timestamps()
+        timeout(time: 90, unit: 'MINUTES')
+        buildDiscarder(logRotator(numToKeepStr: '30'))
+        disableConcurrentBuilds(abortPrevious: true)
+    }
+
+    environment {
+        REGISTRY = 'docker.io/ebank'
+        IMAGE_TAG = "${env.GIT_COMMIT.take(12)}"
+        REPORTS = "${env.WORKSPACE}/reports"
+        // Testcontainers talks to the host daemon through the mounted socket.
+        TESTCONTAINERS_HOST_OVERRIDE = 'host.docker.internal'
+        DEV_URL = 'http://app.ebank.localhost'
+    }
+
+    stages {
+        stage('Secrets scan') {
+            steps {
+                sh 'mkdir -p "$REPORTS" && infra/ci/security/scan.sh secrets'
+            }
+        }
+
+        stage('Build and test') {
+            parallel {
+                stage('Backend') {
+                    steps {
+                        dir('backend') {
+                            // Unit, architecture and integration tests (Testcontainers), coverage and SBOM.
+                            sh './mvnw -B -ntp -Pci verify'
+                        }
+                    }
+                    post {
+                        always {
+                            junit allowEmptyResults: false,
+                                  testResults: 'backend/**/target/surefire-reports/*.xml, backend/**/target/failsafe-reports/*.xml'
+                            archiveArtifacts artifacts: 'backend/target/classes/META-INF/sbom/application.cdx.json', allowEmptyArchive: true
+                        }
+                    }
+                }
+                stage('Front end') {
+                    steps {
+                        dir('front-web') {
+                            sh 'npm ci --no-audit --no-fund'
+                            sh 'npx ng test --watch=false --coverage --coverage-reporters=lcovonly --coverage-reporters=text-summary'
+                            sh 'npm run build'
+                            sh 'npx --yes @cyclonedx/cyclonedx-npm@4.1.2 --omit dev --output-file bom.json'
+                        }
+                    }
+                    post {
+                        always {
+                            archiveArtifacts artifacts: 'front-web/bom.json', allowEmptyArchive: true
+                        }
+                    }
+                }
+            }
+        }
+
+        stage('SonarQube') {
+            steps {
+                withSonarQubeEnv('sonarqube') {
+                    dir('backend') {
+                        sh './mvnw -B -ntp -Pci sonar:sonar -Dsonar.branch.name=$BRANCH_NAME'
+                    }
+                    sh '''
+                        docker run --rm -v "$WORKSPACE:$WORKSPACE" -w "$WORKSPACE" \
+                          -e SONAR_HOST_URL -e SONAR_TOKEN="$SONAR_AUTH_TOKEN" \
+                          sonarsource/sonar-scanner-cli:11.4 \
+                          -Dproject.settings=infra/ci/sonarqube/front-web.properties
+                    '''
+                }
+            }
+        }
+
+        stage('Quality gate') {
+            steps {
+                timeout(time: 15, unit: 'MINUTES') {
+                    waitForQualityGate abortPipeline: true
+                }
+            }
+        }
+
+        stage('Security scans') {
+            parallel {
+                stage('SAST') {
+                    steps { sh 'infra/ci/security/scan.sh sast' }
+                }
+                stage('Dependencies') {
+                    steps { sh 'infra/ci/security/scan.sh deps' }
+                }
+                stage('Infrastructure as code') {
+                    steps { sh 'infra/ci/security/scan.sh iac' }
+                }
+            }
+        }
+
+        stage('Images') {
+            steps {
+                sh '''
+                    docker build -f infra/docker/backend/Dockerfile -t "$REGISTRY/ebank-backend:$IMAGE_TAG" backend
+                    docker build -f infra/docker/front-web/Dockerfile --build-context docker-config=infra/docker/front-web \
+                      -t "$REGISTRY/ebank-front-web:$IMAGE_TAG" front-web
+                '''
+            }
+        }
+
+        stage('Image scan') {
+            steps {
+                sh 'infra/ci/security/scan.sh image "$REGISTRY/ebank-backend:$IMAGE_TAG"'
+                sh 'infra/ci/security/scan.sh image "$REGISTRY/ebank-front-web:$IMAGE_TAG"'
+            }
+        }
+
+        stage('Push') {
+            when { branch 'master' }
+            steps {
+                withCredentials([usernamePassword(credentialsId: 'dockerhub', usernameVariable: 'DOCKER_USER', passwordVariable: 'DOCKER_TOKEN')]) {
+                    sh '''
+                        echo "$DOCKER_TOKEN" | docker login -u "$DOCKER_USER" --password-stdin docker.io
+                        for image in ebank-backend ebank-front-web; do
+                          docker push "$REGISTRY/$image:$IMAGE_TAG"
+                        done
+                    '''
+                }
+            }
+            post {
+                always { sh 'docker logout docker.io || true' }
+            }
+        }
+
+        stage('Deploy dev') {
+            when { branch 'master' }
+            steps {
+                withCredentials([file(credentialsId: 'kubeconfig-dev', variable: 'KUBECONFIG')]) {
+                    sh '''
+                        kubectl kustomize --load-restrictor LoadRestrictionsNone infra/k3s/overlays/dev \
+                          | sed -e "s#docker.io/ebank/ebank-backend:latest#$REGISTRY/ebank-backend:$IMAGE_TAG#" \
+                                -e "s#docker.io/ebank/ebank-front-web:latest#$REGISTRY/ebank-front-web:$IMAGE_TAG#" \
+                          | kubectl apply -f -
+                        kubectl -n ebank-dev rollout status deployment/backend --timeout=5m
+                        kubectl -n ebank-dev rollout status deployment/front-web --timeout=3m
+                    '''
+                }
+            }
+        }
+
+        stage('DAST') {
+            when { branch 'master' }
+            steps {
+                sh 'infra/ci/security/scan.sh dast "$DEV_URL"'
+            }
+        }
+    }
+
+    post {
+        always {
+            archiveArtifacts artifacts: 'reports/**', allowEmptyArchive: true
+            recordIssues(enabledForFailure: true, tools: [sarif(pattern: 'reports/*.sarif')])
+        }
+        cleanup {
+            cleanWs(deleteDirs: true, notFailBuild: true)
+        }
+    }
+}

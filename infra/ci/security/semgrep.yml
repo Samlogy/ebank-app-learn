@@ -1,0 +1,66 @@
+# EBANK-specific rules, on top of the Semgrep community rulesets.
+rules:
+  - id: ebank-money-as-double
+    languages: [java]
+    severity: ERROR
+    message: Money is BigDecimal plus a currency, never double or float (project.md, non-negotiable rules).
+    patterns:
+      - pattern-either:
+          - pattern: double $AMOUNT;
+          - pattern: float $AMOUNT;
+          - pattern: Double $AMOUNT;
+      - metavariable-regex:
+          metavariable: $AMOUNT
+          regex: (?i).*(amount|balance|price|total).*
+
+  - id: ebank-log-sensitive-value
+    languages: [java]
+    severity: ERROR
+    message: Do not log tokens, emails, message content or account numbers. Log IDs instead.
+    patterns:
+      - pattern-either:
+          - pattern: $LOG.$LEVEL(..., $X.getEmail(), ...)
+          - pattern: $LOG.$LEVEL(..., $X.email(), ...)
+          - pattern: $LOG.$LEVEL(..., $X.getContent(), ...)
+          - pattern: $LOG.$LEVEL(..., $X.getTokenValue(), ...)
+          - pattern: $LOG.$LEVEL(..., $X.getAccountId(), ...)
+      - metavariable-regex:
+          metavariable: $LEVEL
+          regex: (trace|debug|info|warn|error)
+
+  - id: ebank-user-id-from-request
+    languages: [java]
+    severity: ERROR
+    message: The user ID comes from the JWT (CurrentUser), never from a request parameter or path.
+    patterns:
+      - pattern-either:
+          - pattern: $RET $M(..., @RequestParam $T $UID, ...) { ... }
+          - pattern: $RET $M(..., @RequestParam(...) $T $UID, ...) { ... }
+          - pattern: $RET $M(..., @PathVariable $T $UID, ...) { ... }
+          - pattern: $RET $M(..., @PathVariable(...) $T $UID, ...) { ... }
+      - metavariable-regex:
+          metavariable: $UID
+          regex: (?i)(user|customer|owner|advisor)_?id
+
+  - id: ebank-angular-bypass-sanitizer
+    languages: [typescript]
+    severity: ERROR
+    message: Do not bypass Angular's sanitizer. Chat and notification content must render as plain text.
+    pattern-either:
+      - pattern: $X.bypassSecurityTrustHtml(...)
+      - pattern: $X.bypassSecurityTrustScript(...)
+      - pattern: $X.bypassSecurityTrustResourceUrl(...)
+
+  - id: ebank-wildcard-cors
+    languages: [java]
+    severity: ERROR
+    message: CORS origins come from ebank.security.cors-allowed-origins, never "*" or @CrossOrigin.
+    pattern-either:
+      - pattern: |
+          @CrossOrigin(...)
+          class $C { ... }
+      - pattern: |
+          @CrossOrigin(...)
+          $RET $M(...) { ... }
+      - pattern: $C.setAllowedOrigins(List.of("*"))
+      - pattern: $C.addAllowedOrigin("*")

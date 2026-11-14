@@ -1,0 +1,7 @@
+# Elasticsearch and Mailpit inside the cluster, for dev only. qua and prod use managed services.
+apiVersion: kustomize.config.k8s.io/v1alpha1
+kind: Component
+
+resources:
+  - elasticsearch.yaml
+  - mailpit.yaml

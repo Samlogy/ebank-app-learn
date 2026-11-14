@@ -128,7 +128,7 @@ services:
       OTLP_TRACES_ENABLED: ${OTLP_TRACES_ENABLED:-false}
       OTLP_TRACES_ENDPOINT: http://otel-collector:4318/v1/traces
     labels:
-      co.elastic.logs/enabled: "true"
+      ebank-logs: "true"    # picked up by Filebeat (--profile observability)
     ports:
       - "127.0.0.1:8080:8080"
     depends_on:

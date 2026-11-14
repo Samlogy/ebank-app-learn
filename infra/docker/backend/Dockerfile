@@ -6,8 +6,7 @@ COPY . .
 RUN --mount=type=cache,target=/root/.m2 ./mvnw -B -q -DskipTests package \
     && java -Djarmode=tools -jar ebank-app/target/ebank-app-*.jar extract --layers --destination /extracted
 
-
-    FROM eclipse-temurin:21.0.13_9-jre-alpine-3.24
+FROM eclipse-temurin:21.0.13_9-jre-alpine-3.24
 RUN addgroup -S -g 10001 ebank && adduser -S -u 10001 -G ebank ebank
 WORKDIR /app
 # One image layer per Spring Boot layer, so code changes do not re-push the dependencies.

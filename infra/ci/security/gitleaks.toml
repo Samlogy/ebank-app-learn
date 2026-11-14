@@ -1,0 +1,16 @@
+# gitleaks: the default rules, minus the dev-only values that are meant to be in the repository.
+[extend]
+useDefault = true
+
+[allowlist]
+description = "Local development credentials, documented as dev-only"
+regexes = [
+  '''dev-notifications-secret''',
+  '''dev-redis''',
+  '''Test-1234!''',
+]
+paths = [
+  '''infra/compose/docker-compose\.yml''',
+  '''infra/k3s/overlays/dev/kustomization\.yaml''',
+  '''.*/src/test/.*''',
+]

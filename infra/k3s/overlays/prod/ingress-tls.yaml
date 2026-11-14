@@ -1,0 +1,4 @@
+# Certificates from cert-manager (installed separately) with a Let's Encrypt ClusterIssuer.
+- op: add
+  path: /metadata/annotations/cert-manager.io~1cluster-issuer
+  value: letsencrypt-prod
