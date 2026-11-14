@@ -1,0 +1,63 @@
+# prod: three Vault servers in one Raft cluster, unsealed automatically by a transit key.
+#   helm upgrade --install vault hashicorp/vault --version 0.34.1 -n vault --create-namespace \
+#     -f infra/vault/k3s/vault-values.yaml -f infra/vault/k3s/vault-values-ha.yaml
+#
+# Needs, before the install (see infra/vault/README.md, "prod: HA and auto-unseal"):
+#   - the unseal Vault: a separate, small Vault outside this cluster, with the transit key
+#     ebank-prod-unseal (infra/vault/k3s/unseal/setup-transit.sh);
+#   - the Secret vault-transit-unseal (key "token") in the vault namespace: its periodic token.
+# A cloud KMS works the same way: replace the seal "transit" block with seal "awskms",
+# "gcpckms" or "azurekeyvault", and the Secret with the cloud credentials.
+#
+# Checked on three Docker containers: init with recovery keys, a restarted node unseals on its
+# own, a standby serves its own metrics, migration from unseal keys with `unseal -migrate`.
+server:
+  standalone:
+    enabled: false
+  ha:
+    enabled: true
+    replicas: 3
+    raft:
+      enabled: true
+      setNodeId: true          # node_id = pod name, so list-peers reads vault-0, vault-1, vault-2
+      config: |
+        ui = true
+        listener "tcp" {
+          address         = "[::]:8200"
+          cluster_address = "[::]:8201"
+          tls_disable     = 1
+          telemetry {
+            unauthenticated_metrics_access = true
+          }
+        }
+        storage "raft" {
+          path = "/vault/data"
+          retry_join { leader_api_addr = "http://vault-0.vault-internal:8200" }
+          retry_join { leader_api_addr = "http://vault-1.vault-internal:8200" }
+          retry_join { leader_api_addr = "http://vault-2.vault-internal:8200" }
+        }
+        # The unseal Vault encrypts this cluster's root key: no key holder is needed after a
+        # restart. Keep it outside this cluster, or the two can lock each other out.
+        seal "transit" {
+          address    = "https://vault-unseal.example:8200"
+          key_name   = "ebank-prod-unseal"
+          mount_path = "transit/"
+        }
+        service_registration "kubernetes" {}
+        telemetry {
+          prometheus_retention_time = "30s"
+          disable_hostname          = true
+        }
+  # The transit seal reads its token from VAULT_TOKEN. Inside the pods, `vault` CLI commands that
+  # need a token therefore set VAULT_TOKEN themselves (apply-in-cluster.sh does).
+  extraSecretEnvironmentVars:
+    - envName: VAULT_TOKEN
+      secretName: vault-transit-unseal
+      secretKey: token
+  # The chart's default anti-affinity puts each server on a different node: prod needs 3 nodes.
+  # Its PodDisruptionBudget lets a drain take one server at a time.
+  resources:
+    requests: { cpu: 250m, memory: 256Mi }
+    limits: { memory: 1Gi }
+  dataStorage:
+    size: 10Gi

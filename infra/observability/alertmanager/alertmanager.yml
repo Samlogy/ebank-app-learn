@@ -27,10 +27,12 @@ receivers:
         headers:
           Subject: '[{{ .Status | toUpper }}{{ if eq .Status "firing" }}:{{ .Alerts.Firing | len }}{{ end }}] {{ .CommonLabels.alertname }} ({{ .CommonLabels.severity }})'
 
-# When the backend is down, its error rate, latency, outbox and chat alerts are consequences:
-# only the root cause is sent.
+# When the backend is down, its error budget, outbox and chat alerts are consequences:
+# only the root cause is sent. The same goes for Vault and the ExternalSecrets that read it.
 inhibit_rules:
   - source_matchers: [alertname="EbankBackendDown"]
     target_matchers: [severity="warning"]
   - source_matchers: [alertname="EbankBackendDown"]
-    target_matchers: [alertname="EbankHighErrorRate"]
+    target_matchers: [alertname=~"EbankAvailabilityBudgetBurn|EbankLatencyBudgetBurn"]
+  - source_matchers: [alertname=~"VaultDown|VaultSealed|VaultNoActiveNode"]
+    target_matchers: [alertname=~"ExternalSecretSyncFailing|VaultSlowRequests|EbankDbCredentialsExpiring"]

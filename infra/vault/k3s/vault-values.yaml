@@ -2,7 +2,10 @@
 #   helm upgrade --install vault hashicorp/vault --version 0.34.1 -n vault --create-namespace \
 #     -f infra/vault/k3s/vault-values.yaml
 # One server with integrated (Raft) storage: right for dev and qua on a single-node k3s. For prod,
-# run 3 replicas (server.ha) and an auto-unseal (cloud KMS or transit) instead of manual unseal keys.
+# add vault-values-ha.yaml: 3 replicas (server.ha) and transit auto-unseal instead of unseal keys.
+#
+# Metrics: /v1/sys/metrics?format=prometheus, without a token (the listener's telemetry block),
+# scraped by kube-prometheus-stack once serverTelemetry.serviceMonitor.enabled is true.
 global:
   # The EBANK pods talk to Vault inside the cluster; TLS ends at the ingress if Vault's UI is exposed.
   tlsDisable: true
@@ -23,11 +26,19 @@ server:
         address     = "[::]:8200"
         cluster_address = "[::]:8201"
         tls_disable = 1
+        # Metrics carry no secret; the endpoint is only reachable inside the cluster.
+        telemetry {
+          unauthenticated_metrics_access = true
+        }
       }
       storage "raft" {
         path = "/vault/data"
       }
       service_registration "kubernetes" {}
+      telemetry {
+        prometheus_retention_time = "30s"
+        disable_hostname          = true
+      }
   dataStorage:
     enabled: true
     size: 2Gi
@@ -42,3 +53,12 @@ server:
 
 ui:
   enabled: true
+
+# kube-prometheus-stack (infra/observability/k8s): turn on once it is installed, as the
+# ServiceMonitor kind only exists with its CRDs. Every pod is scraped through vault-internal, so
+# standbys report their own sealed state; the alerts are in infra/observability/prometheus/rules.
+serverTelemetry:
+  serviceMonitor:
+    enabled: false
+    matchLabels:
+      vault-internal: "true"

@@ -5,7 +5,7 @@ description: >-
   Traefik ingress. Elasticsearch and Mailpit are included for dev only.
 type: application
 # Chart version: bump on every change to templates or default values.
-version: 0.1.0
+version: 0.2.0
 # Default image tag of the backend and front end when image.tag is not set.
 appVersion: "latest"
 keywords: [ebank, spring-boot, angular, keycloak, k3s]

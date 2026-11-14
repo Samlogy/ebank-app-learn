@@ -96,10 +96,23 @@ spec:
             - { name: VAULT_KUBERNETES_PATH, value: {{ .Values.vault.kubernetesAuthPath | quote }} }
             - { name: VAULT_KUBERNETES_TOKEN_FILE, value: /var/run/secrets/vault/token }
             - { name: EBANK_ENV, value: {{ .Values.vault.env | quote }} }
+            {{- if .Values.vault.database.enabled }}
+            # Its own database user from Vault, renewed and replaced before it expires.
+            - { name: VAULT_DATABASE_ENABLED, value: "true" }
+            - { name: VAULT_DATABASE_MOUNT, value: {{ .Values.vault.database.mount | quote }} }
+            - { name: VAULT_DATABASE_ROLE, value: "ebank-{{ .Values.vault.env }}-backend" }
+            {{- end }}
           {{- else }}
           envFrom:
             - configMapRef: { name: ebank-backend-config }
             - secretRef: { name: ebank-backend-secrets }
+          {{- end }}
+          {{- if .Values.rabbitmq.enabled }}
+            {{- if not $vault }}
+          env:
+            {{- end }}
+            # Outbox through RabbitMQ: host and credentials with the rest of the config.
+            - { name: EBANK_OUTBOX_RABBITMQ_ENABLED, value: "true" }
           {{- end }}
           ports:
             - { name: http, containerPort: 8080 }

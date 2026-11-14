@@ -1,0 +1,113 @@
+# Prometheus, Alertmanager and Grafana in k3s, with the prometheus-operator (chart 93.3.0):
+#   helm upgrade --install monitoring prometheus-community/kube-prometheus-stack --version 93.3.0 \
+#     -n monitoring --create-namespace -f infra/observability/k8s/kube-prometheus-stack-values.yaml
+# Then each EBANK release with monitoring.enabled=true adds its ServiceMonitors, the rules of
+# infra/observability/prometheus/rules and the dashboard, and Vault its own ServiceMonitor
+# (serverTelemetry.serviceMonitor.enabled). See README.md in this folder.
+#
+# Before the install, in the monitoring namespace (never in git):
+#   kubectl -n monitoring create secret generic grafana-admin --from-literal=admin-user=admin --from-literal=admin-password=...
+#   kubectl -n monitoring create secret generic alertmanager-smtp --from-literal=password=...
+
+# k3s runs the control plane in one process and does not expose these components' metrics.
+kubeControllerManager: { enabled: false }
+kubeScheduler: { enabled: false }
+kubeProxy: { enabled: false }
+kubeEtcd: { enabled: false }
+
+prometheus:
+  prometheusSpec:
+    # Take every ServiceMonitor, PodMonitor, Probe and PrometheusRule of the cluster, not only the
+    # ones labelled for this release: the EBANK chart and the Vault chart bring their own.
+    serviceMonitorSelectorNilUsesHelmValues: false
+    podMonitorSelectorNilUsesHelmValues: false
+    probeSelectorNilUsesHelmValues: false
+    ruleSelectorNilUsesHelmValues: false
+    # The SLO rules look 30 days back (ebank-slo.yml): keep a little more.
+    retention: 35d
+    retentionSize: 18GB
+    externalLabels:
+      cluster: ebank
+    storageSpec:
+      volumeClaimTemplate:
+        spec:
+          accessModes: ["ReadWriteOnce"]
+          resources: { requests: { storage: 20Gi } }
+    resources:
+      requests: { cpu: 200m, memory: 1Gi }
+      limits: { memory: 2Gi }
+
+alertmanager:
+  alertmanagerSpec:
+    # Mounted at /etc/alertmanager/secrets/alertmanager-smtp/: the SMTP password stays out of the config.
+    secrets: [alertmanager-smtp]
+    storage:
+      volumeClaimTemplate:
+        spec:
+          accessModes: ["ReadWriteOnce"]
+          resources: { requests: { storage: 1Gi } }
+  # Same routing as infra/observability/alertmanager/alertmanager.yml, with a real SMTP server.
+  config:
+    global:
+      resolve_timeout: 5m
+      smtp_smarthost: smtp.example:587
+      smtp_from: alertmanager@ebank.example
+      smtp_auth_username: alertmanager@ebank.example
+      smtp_auth_password_file: /etc/alertmanager/secrets/alertmanager-smtp/password
+      smtp_require_tls: true
+    route:
+      receiver: ops-email
+      group_by: [alertname, severity, namespace]
+      group_wait: 30s
+      group_interval: 5m
+      repeat_interval: 4h
+      routes:
+        # The operator's always-firing heartbeat: wire it to a dead man's switch, never to email.
+        - matchers: [alertname="Watchdog"]
+          receiver: "null"
+        - matchers: [alertname="InfoInhibitor"]
+          receiver: "null"
+        - matchers: [severity="critical"]
+          receiver: ops-email
+          repeat_interval: 1h
+    receivers:
+      - name: "null"
+      - name: ops-email
+        email_configs:
+          - to: ops@ebank.example
+            send_resolved: true
+    inhibit_rules:
+      - source_matchers: [alertname="EbankBackendDown"]
+        target_matchers: [severity="warning"]
+        equal: [namespace]
+      - source_matchers: [alertname="EbankBackendDown"]
+        target_matchers: [alertname=~"EbankAvailabilityBudgetBurn|EbankLatencyBudgetBurn"]
+        equal: [namespace]
+      - source_matchers: [alertname=~"VaultDown|VaultSealed|VaultNoActiveNode"]
+        target_matchers: [alertname=~"ExternalSecretSyncFailing|VaultSlowRequests|EbankDbCredentialsExpiring"]
+      # The chart's defaults: a critical alert hides the warnings of the same alert.
+      - source_matchers: [severity="critical"]
+        target_matchers: [severity=~"warning|info"]
+        equal: [namespace, alertname]
+      - source_matchers: [alertname="InfoInhibitor"]
+        target_matchers: [severity="info"]
+
+grafana:
+  admin:
+    existingSecret: grafana-admin
+  # Dashboards from ConfigMaps labelled grafana_dashboard, in any namespace (the EBANK chart's).
+  sidecar:
+    dashboards:
+      enabled: true
+      label: grafana_dashboard
+      searchNamespace: ALL
+  additionalDataSources:
+    # Pod logs, shipped by Alloy (alloy-values.yaml).
+    - name: Loki
+      uid: loki
+      type: loki
+      access: proxy
+      url: http://loki.monitoring:3100
+  persistence:
+    enabled: true
+    size: 1Gi

@@ -1,20 +1,26 @@
 # Runbooks
 
-One page per Prometheus alert in [ebank-alerts.yml](../../infra/observability/prometheus/rules/ebank-alerts.yml). Each alert links here through its `runbook_url` annotation, so the page opens from the alert email, Alertmanager or Grafana.
+One page per Prometheus alert in [infra/observability/prometheus/rules](../../infra/observability/prometheus/rules) (`ebank-alerts.yml`, `ebank-slo.yml`, `vault-alerts.yml`). Each alert links here through its `runbook_url` annotation, so the page opens from the alert email, Alertmanager or Grafana.
 
 | Alert | Severity | Page |
 |---|---|---|
 | `EbankBackendDown` | critical | [ebank-backend-down.md](ebank-backend-down.md) |
-| `EbankHighErrorRate` | critical | [ebank-high-error-rate.md](ebank-high-error-rate.md) |
-| `EbankSlowRequests` | warning | [ebank-slow-requests.md](ebank-slow-requests.md) |
+| `EbankAvailabilityBudgetBurn` | critical, warning | [ebank-availability-budget-burn.md](ebank-availability-budget-burn.md) |
+| `EbankLatencyBudgetBurn` | critical, warning | [ebank-latency-budget-burn.md](ebank-latency-budget-burn.md) |
 | `EbankHeapAlmostFull` | warning | [ebank-heap-almost-full.md](ebank-heap-almost-full.md) |
 | `EbankAuthRejectionSpike` | warning | [ebank-auth-rejection-spike.md](ebank-auth-rejection-spike.md) |
 | `EbankOutboxBacklog` | warning | [ebank-outbox-backlog.md](ebank-outbox-backlog.md) |
 | `EbankOutboxEventsFailed` | warning | [ebank-outbox-events-failed.md](ebank-outbox-events-failed.md) |
+| `EbankOutboxDeadLetters` | warning | [ebank-outbox-dead-letters.md](ebank-outbox-dead-letters.md) |
 | `EbankNotificationDeliveryFailing` | warning | [ebank-notification-delivery-failing.md](ebank-notification-delivery-failing.md) |
 | `EbankAssistantUnavailable` | warning | [ebank-assistant-unavailable.md](ebank-assistant-unavailable.md) |
 | `EbankAdvisorQueueSlow` | warning | [ebank-advisor-queue-slow.md](ebank-advisor-queue-slow.md) |
-| (no alert yet) Vault unavailable or sealed | - | [vault-unavailable.md](vault-unavailable.md) |
+| `EbankDbCredentialsExpiring`, `EbankDbCredentialsRotationFailing` | critical, warning | [ebank-db-credentials.md](ebank-db-credentials.md) |
+| `VaultDown`, `VaultSealed`, `VaultSlowRequests` | critical, warning | [vault-unavailable.md](vault-unavailable.md) |
+| `VaultNoActiveNode`, `VaultRaftUnhealthy` | critical, warning | [vault-raft-unhealthy.md](vault-raft-unhealthy.md) |
+| `VaultAuditLogFailing` | critical | [vault-audit-failing.md](vault-audit-failing.md) |
+| `VaultLeaseCountHigh` | warning | [vault-lease-count-high.md](vault-lease-count-high.md) |
+| `ExternalSecretSyncFailing` | warning | [external-secret-sync-failing.md](external-secret-sync-failing.md) |
 
 ## Commands used in the pages
 

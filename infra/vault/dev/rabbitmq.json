@@ -1,0 +1,1 @@
+{ "RABBITMQ_DEFAULT_USER": "ebank", "RABBITMQ_DEFAULT_PASS": "dev-rabbitmq" }

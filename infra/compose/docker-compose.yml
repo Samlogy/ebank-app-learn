@@ -35,6 +35,30 @@ services:
       timeout: 3s
       retries: 20
 
+  # Outbox transport, only with --profile broker and EBANK_OUTBOX_RABBITMQ_ENABLED=true:
+  #   EBANK_OUTBOX_RABBITMQ_ENABLED=true docker compose --profile app --profile broker up -d --build --wait
+  # Without it the backend delivers events in-process and never connects here. UI-less image:
+  # inspect queues with `docker compose exec rabbitmq rabbitmqctl list_queues name messages`.
+  rabbitmq:
+    profiles: [broker]
+    image: rabbitmq:4.3.7-alpine
+    hostname: rabbitmq
+    environment:
+      RABBITMQ_DEFAULT_USER: ${RABBITMQ_USERNAME:-ebank}
+      RABBITMQ_DEFAULT_PASS: ${RABBITMQ_PASSWORD:-ebank}
+    volumes:
+      - ../rabbitmq/rabbitmq.conf:/etc/rabbitmq/conf.d/10-ebank.conf:ro
+      - ../rabbitmq/enabled_plugins:/etc/rabbitmq/enabled_plugins:ro
+      - rabbitmq-data:/var/lib/rabbitmq
+    ports:
+      - "127.0.0.1:5672:5672"
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "-q", "check_running"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 20s
+
   # Analytics store (and later the "E" of ELK). Security is off: local only, bound to localhost.
   elasticsearch:
     image: docker.elastic.co/elasticsearch/elasticsearch:9.4.8
@@ -81,6 +105,12 @@ services:
     environment:
       VAULT_DEV_ROOT_TOKEN_ID: ${VAULT_DEV_ROOT_TOKEN:-dev-root-token}
       SKIP_SETCAP: "true"
+      # Prometheus metrics on a second listener, without a token, reachable only inside compose
+      # (--profile observability scrapes vault:8202). Same telemetry as in k3s.
+      VAULT_LOCAL_CONFIG: >-
+        {"telemetry": {"prometheus_retention_time": "30s", "disable_hostname": true},
+         "listener": [{"tcp": {"address": "0.0.0.0:8202", "tls_disable": true,
+                               "telemetry": {"unauthenticated_metrics_access": true}}}]}
     ports:
       - "127.0.0.1:8200:8200"
     healthcheck:
@@ -179,6 +209,8 @@ services:
       LOGGING_STRUCTURED_FORMAT_CONSOLE: ecs
       OTLP_TRACES_ENABLED: ${OTLP_TRACES_ENABLED:-false}
       OTLP_TRACES_ENDPOINT: http://otel-collector:4318/v1/traces
+      # Outbox through RabbitMQ (needs --profile broker). Host and credentials are in Vault.
+      EBANK_OUTBOX_RABBITMQ_ENABLED: ${EBANK_OUTBOX_RABBITMQ_ENABLED:-false}
     labels:
       ebank-logs: "true"    # picked up by Filebeat (--profile observability)
     ports:
@@ -198,6 +230,9 @@ services:
         condition: service_started
       elasticsearch:
         condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+        required: false    # only with --profile broker
     healthcheck:
       test: ["CMD", "wget", "-qO-", "http://localhost:8080/actuator/health/readiness"]
       interval: 10s
@@ -348,6 +383,7 @@ services:
     restart: "no"
 
 volumes:
+  rabbitmq-data:
   prometheus-data:
   alertmanager-data:
   grafana-data:

@@ -8,8 +8,8 @@ spring:
           jwk-set-uri: ${KEYCLOAK_JWK_SET_URI:http://localhost:8180/realms/ebank/protocol/openid-connect/certs}
   datasource:
     url: ${DB_URL:jdbc:postgresql://localhost:5432/ebank}
-    username: ${DB_USERNAME:ebank}
-    password: ${DB_PASSWORD:ebank}
+    username: ${VAULT_DB_USERNAME:${DB_USERNAME:ebank}}    # dynamic user from Vault first
+    password: ${VAULT_DB_PASSWORD:${DB_PASSWORD:ebank}}
   data:
     redis:
       host: ${REDIS_HOST:localhost}

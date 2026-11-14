@@ -1,0 +1,89 @@
+# Vault and External Secrets Operator. Vault serves /v1/sys/metrics?format=prometheus (telemetry
+# block and unauthenticated_metrics_access in infra/vault/k3s/vault-values*.yaml), even when sealed.
+# Its targets carry service="vault" in compose; in k3s the ServiceMonitor of the Vault chart scrapes
+# every pod through the vault-internal Service (standbys serve their own metrics).
+# Tested by tests/vault-alerts-test.yml (promtool).
+groups:
+  - name: vault
+    rules:
+      - alert: VaultDown
+        expr: up{service=~"vault|vault-internal"} == 0
+        for: 2m
+        labels: { severity: critical }
+        annotations:
+          runbook_url: https://github.com/Samlogy/ebank-app-learn/blob/master/docs/runbooks/vault-unavailable.md
+          summary: Vault {{ $labels.instance }} does not answer
+          description: New backend pods cannot start and ExternalSecrets stop refreshing until it is back.
+
+      - alert: VaultSealed
+        # A restart without auto-unseal leaves Vault sealed: it answers, but serves nothing.
+        expr: vault_core_unsealed == 0
+        for: 1m
+        labels: { severity: critical }
+        annotations:
+          runbook_url: https://github.com/Samlogy/ebank-app-learn/blob/master/docs/runbooks/vault-unavailable.md
+          summary: Vault {{ $labels.instance }} is sealed
+          description: It needs unsealing (key holders), or the auto-unseal key is unreachable.
+
+      - alert: VaultNoActiveNode
+        # HA: unsealed nodes but none of them is the leader, so every request fails.
+        expr: max(vault_core_unsealed) == 1 and on() max(vault_core_active) == 0
+        for: 2m
+        labels: { severity: critical }
+        annotations:
+          runbook_url: https://github.com/Samlogy/ebank-app-learn/blob/master/docs/runbooks/vault-raft-unhealthy.md
+          summary: Vault has no active node
+          description: The Raft cluster cannot elect a leader (quorum lost?).
+
+      - alert: VaultAuditLogFailing
+        # Vault refuses every request it cannot write to at least one audit device.
+        expr: increase(vault_audit_log_request_failure[5m]) > 0 or increase(vault_audit_log_response_failure[5m]) > 0
+        labels: { severity: critical }
+        annotations:
+          runbook_url: https://github.com/Samlogy/ebank-app-learn/blob/master/docs/runbooks/vault-audit-failing.md
+          summary: Vault cannot write its audit log
+          description: Requests are being refused while the audit device fails.
+
+      - alert: VaultRaftUnhealthy
+        # Only meaningful with 3 nodes or more (prod, server.ha): one more failure would lose quorum.
+        # Counted from the scrape targets: vault_raft_peers is not reported while a peer is missing.
+        expr: |
+          (min(vault_autopilot_failure_tolerance) < 1 or min(vault_autopilot_healthy) == 0)
+          and on() count(up{service=~"vault|vault-internal"}) >= 3
+        for: 10m
+        labels: { severity: warning }
+        annotations:
+          runbook_url: https://github.com/Samlogy/ebank-app-learn/blob/master/docs/runbooks/vault-raft-unhealthy.md
+          summary: The Vault Raft cluster cannot lose another node
+          description: Autopilot reports an unhealthy node or no failure tolerance left.
+
+      - alert: VaultLeaseCountHigh
+        # Leases pile up when clients ask for new credentials instead of renewing theirs.
+        expr: max(vault_expire_num_leases) > 5000
+        for: 15m
+        labels: { severity: warning }
+        annotations:
+          runbook_url: https://github.com/Samlogy/ebank-app-learn/blob/master/docs/runbooks/vault-lease-count-high.md
+          summary: "{{ $value }} leases in Vault"
+          description: Usually a client that requests new dynamic credentials in a loop.
+
+      - alert: VaultSlowRequests
+        # vault_core_handle_request is in milliseconds.
+        expr: max(vault_core_handle_request{quantile="0.99"}) > 500
+        for: 10m
+        labels: { severity: warning }
+        annotations:
+          runbook_url: https://github.com/Samlogy/ebank-app-learn/blob/master/docs/runbooks/vault-unavailable.md
+          summary: Vault answers slowly ({{ $value | humanize }} ms at p99)
+
+  - name: external-secrets
+    rules:
+      - alert: ExternalSecretSyncFailing
+        # k3s only. The Secret keeps its last values (deletionPolicy: Retain), but changes in
+        # Vault no longer reach PostgreSQL, Redis, Keycloak or the front end.
+        expr: max by (namespace, name) (externalsecret_status_condition{condition="Ready", status="False"}) == 1
+        for: 15m
+        labels: { severity: warning }
+        annotations:
+          runbook_url: https://github.com/Samlogy/ebank-app-learn/blob/master/docs/runbooks/external-secret-sync-failing.md
+          summary: ExternalSecret {{ $labels.namespace }}/{{ $labels.name }} does not sync

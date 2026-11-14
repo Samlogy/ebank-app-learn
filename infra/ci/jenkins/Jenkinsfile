@@ -6,6 +6,9 @@
 //     "kubeconfig-<env>" (secret file) and "vault-approle-<env>" (username = AppRole role ID,
 //     password = secret ID of ebank-<env>-ci, see infra/vault/README.md)
 //   - a "ebank-release-managers" group or user, who approves the prod deploy
+//   - once infra/ci/cosign/cosign.pub is committed: "cosign-key" (secret file, the private key)
+//     and "cosign-password" (secret text). Images are then signed after the push and verified
+//     before each deploy (README, "Image signing").
 //   - agents that can reach the host's Docker socket (Testcontainers, image builds, scanners)
 //
 // Every branch: secrets scan, build and tests, SonarQube quality gate, SAST, IaC and dependency
@@ -116,6 +119,9 @@ pipeline {
                 stage('Infrastructure as code') {
                     steps { sh 'infra/ci/security/scan.sh iac' }
                 }
+                stage('Alert rules') {
+                    steps { sh 'infra/ci/security/scan.sh rules' }
+                }
                 stage('API contract') {
                     // backend/openapi/ebank-api.json must match what the backend serves (written by
                     // OpenApiSpecIT during the build) and stay backward compatible with master's.
@@ -155,6 +161,32 @@ pipeline {
                         for image in ebank-backend ebank-front-web; do
                           docker push "$REGISTRY/$image:$IMAGE_TAG"
                         done
+                    '''
+                }
+            }
+            post {
+                always { sh 'docker logout docker.io || true' }
+            }
+        }
+
+        // Turned on by committing the public key: until then nothing is signed nor verified.
+        stage('Sign') {
+            when {
+                allOf {
+                    branch 'master'
+                    expression { fileExists('infra/ci/cosign/cosign.pub') }
+                }
+            }
+            steps {
+                withCredentials([
+                    usernamePassword(credentialsId: 'dockerhub', usernameVariable: 'DOCKER_USER', passwordVariable: 'DOCKER_TOKEN'),
+                    file(credentialsId: 'cosign-key', variable: 'COSIGN_KEY'),
+                    string(credentialsId: 'cosign-password', variable: 'COSIGN_PASSWORD'),
+                ]) {
+                    // cosign pushes the signatures next to the images, so it needs the registry login.
+                    sh '''
+                        echo "$DOCKER_TOKEN" | docker login -u "$DOCKER_USER" --password-stdin docker.io
+                        infra/ci/sign-images.sh
                     '''
                 }
             }

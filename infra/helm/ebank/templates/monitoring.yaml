@@ -1,0 +1,73 @@
+{{- /*
+kube-prometheus-stack (monitoring.enabled): the same alert rules and dashboard as docker compose,
+read from infra/observability through the links in files/. Targets get the labels the rules use
+(job and service "ebank-backend", "rabbitmq"), as the static scrape configs of compose do.
+*/ -}}
+{{- if .Values.monitoring.enabled }}
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: backend
+  labels:
+    {{- include "ebank.labels" (dict "root" $ "name" "backend") | nindent 4 }}
+    {{- with .Values.monitoring.labels }}{{ toYaml . | nindent 4 }}{{ end }}
+spec:
+  selector:
+    matchLabels:
+      {{- include "ebank.labels" (dict "root" $ "name" "backend") | nindent 6 }}
+  endpoints:
+    - port: {{ ternary "management" "http" (eq .Values.backend.actuatorPort "management") }}
+      path: /actuator/prometheus
+      interval: 15s
+      relabelings:
+        - { targetLabel: job, replacement: ebank-backend }
+        - { targetLabel: service, replacement: ebank-backend }
+{{- if .Values.rabbitmq.enabled }}
+---
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: rabbitmq
+  labels:
+    {{- include "ebank.labels" (dict "root" $ "name" "rabbitmq") | nindent 4 }}
+    {{- with .Values.monitoring.labels }}{{ toYaml . | nindent 4 }}{{ end }}
+spec:
+  selector:
+    matchLabels:
+      {{- include "ebank.labels" (dict "root" $ "name" "rabbitmq") | nindent 6 }}
+  endpoints:
+    - port: metrics
+      interval: 30s
+      relabelings:
+        - { targetLabel: service, replacement: rabbitmq }
+{{- end }}
+{{- range $path, $_ := .Files.Glob "files/prometheus-rules/*.yml" }}
+{{- if or $.Values.monitoring.vaultRules (ne (base $path) "vault-alerts.yml") }}
+---
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: {{ base $path | trimSuffix ".yml" }}
+  labels:
+    {{- include "ebank.labels" (dict "root" $ "name" "monitoring") | nindent 4 }}
+    {{- with $.Values.monitoring.labels }}{{ toYaml . | nindent 4 }}{{ end }}
+spec:
+  {{- $.Files.Get $path | nindent 2 }}
+{{- end }}
+{{- end }}
+---
+# Picked up by Grafana's dashboard sidecar (label grafana_dashboard).
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: ebank-dashboards
+  labels:
+    {{- include "ebank.labels" (dict "root" $ "name" "monitoring") | nindent 4 }}
+    grafana_dashboard: "1"
+    {{- with .Values.monitoring.labels }}{{ toYaml . | nindent 4 }}{{ end }}
+data:
+  {{- range $path, $_ := .Files.Glob "files/grafana-dashboards/*.json" }}
+  {{ base $path }}: |
+    {{- $.Files.Get $path | nindent 4 }}
+  {{- end }}
+{{- end }}

@@ -14,9 +14,17 @@ helm.sh/chart: {{ printf "%s-%s" .root.Chart.Name .root.Chart.Version | replace 
 app.kubernetes.io/name: {{ . }}
 {{- end }}
 
-{{/* Image of an EBANK component. Call with (dict "root" $ "image" "ebank-backend"). */}}
+{{/*
+Image of an EBANK component. Call with (dict "root" $ "image" "ebank-backend").
+By digest when image.digests has one (set by deploy.sh after checking its signature), else by tag.
+*/}}
 {{- define "ebank.image" -}}
+{{- $digest := index (.root.Values.image.digests | default dict) .image | default "" -}}
+{{- if $digest -}}
+{{ .root.Values.image.registry }}/{{ .image }}@{{ $digest }}
+{{- else -}}
 {{ .root.Values.image.registry }}/{{ .image }}:{{ .root.Values.image.tag | default .root.Chart.AppVersion }}
+{{- end }}
 {{- end }}
 
 {{/* https behind TLS, http otherwise. */}}

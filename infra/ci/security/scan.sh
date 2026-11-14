@@ -8,7 +8,8 @@
 #   infra/ci/security/scan.sh image <image>    Trivy on a built image
 #   infra/ci/security/scan.sh dast <url>       OWASP ZAP baseline against a running deployment
 #   infra/ci/security/scan.sh api              API contract: committed and up to date, backward compatible with master
-#   infra/ci/security/scan.sh all              everything except image and dast
+#   infra/ci/security/scan.sh rules            Prometheus rules checked and unit-tested (promtool), Alertmanager config (amtool)
+#   infra/ci/security/scan.sh all              everything except image, dast and api
 #
 # Fails on HIGH and CRITICAL findings (and on any leaked secret). Reports go to ./reports.
 # Accepted findings are listed, with a reason, in .trivyignore.yaml and the rule files here.
@@ -25,6 +26,8 @@ TRIVY=aquasec/trivy:0.67.2
 ZAP=ghcr.io/zaproxy/zaproxy:2.16.1
 HELM=alpine/helm:3.19.0
 OPENAPI_DIFF=openapitools/openapi-diff:2.1.7
+PROMETHEUS=prom/prometheus:v3.7.3
+ALERTMANAGER=prom/alertmanager:v0.29.0
 
 # The same path inside the container as outside, so reports and paths match in Jenkins agents too.
 # Tools run as the calling user: no root-owned files left in the workspace.
@@ -71,30 +74,40 @@ deps() {
   trivy fs "${common[@]}" --scanners vuln "$ROOT/front-web/package-lock.json"
 }
 
+# Renders the chart into one file per resource, so an accepted finding can be scoped to one
+# workload in .trivyignore.yaml. The templates alone would not parse as Kubernetes YAML.
+render_chart() {
+  local name=$1 dir=$2
+  shift 2
+  docker run --rm "${USER_FLAGS[@]}" -v "$ROOT:$ROOT" -w "$ROOT" "$HELM" \
+    lint --strict infra/helm/ebank "$@"
+  docker run --rm "${USER_FLAGS[@]}" -v "$ROOT:$ROOT" -w "$ROOT" "$HELM" \
+    template ebank infra/helm/ebank "$@" \
+    | awk -v dir="$dir" -v env="$name" '
+        function flush() { if (doc != "") { file = dir "/" env "-" tolower(kind) "-" name ".yaml"; printf "%s", doc > file; close(file) } doc = ""; kind = ""; name = "" }
+        /^---$/ { flush(); next }
+        /^kind: / && kind == "" { kind = $2 }
+        /^  name: / && name == "" && inmeta { name = $2 }
+        /^metadata:/ { inmeta = 1 } /^[a-z]/ && !/^metadata:/ { inmeta = 0 }
+        { doc = doc $0 "\n" }
+        END { flush() }'
+}
+
 iac() {
   section "Infrastructure as code (Trivy)"
   local rendered="$REPORTS/helm-rendered"
   local chart=infra/helm/ebank
   rm -rf "$rendered" && mkdir -p "$rendered"
-  # Scan what is actually applied: the chart rendered with each environment's values, one file per
-  # resource so an accepted finding can be scoped to one workload in .trivyignore.yaml. The
-  # templates alone would not parse as Kubernetes YAML.
+  # Scan what is actually applied: the chart rendered with each environment's values...
   for env in dev qua prod; do
-    local values=(-f "$chart/values-$env.yaml")
+    local values=(--namespace "ebank-$env" -f "$chart/values-$env.yaml")
     [[ "$env" == dev ]] && values+=(--set-file keycloak.realm=infra/keycloak/realms/ebank-realm.json)
-    docker run --rm "${USER_FLAGS[@]}" -v "$ROOT:$ROOT" -w "$ROOT" "$HELM" \
-      lint --strict "$chart" "${values[@]}"
-    docker run --rm "${USER_FLAGS[@]}" -v "$ROOT:$ROOT" -w "$ROOT" "$HELM" \
-      template ebank "$chart" --namespace "ebank-$env" "${values[@]}" \
-      | awk -v dir="$rendered" -v env="$env" '
-          function flush() { if (doc != "") { file = dir "/" env "-" tolower(kind) "-" name ".yaml"; printf "%s", doc > file; close(file) } doc = ""; kind = ""; name = "" }
-          /^---$/ { flush(); next }
-          /^kind: / && kind == "" { kind = $2 }
-          /^  name: / && name == "" && inmeta { name = $2 }
-          /^metadata:/ { inmeta = 1 } /^[a-z]/ && !/^metadata:/ { inmeta = 0 }
-          { doc = doc $0 "\n" }
-          END { flush() }'
+    render_chart "$env" "$rendered" "${values[@]}"
   done
+  # ...and prod with every option on (RabbitMQ, monitoring, dynamic database credentials), so the
+  # workloads that are off by default are scanned too.
+  render_chart prod-options "$rendered" --namespace ebank-prod -f "$chart/values-prod.yaml" \
+    --set rabbitmq.enabled=true --set monitoring.enabled=true --set vault.database.enabled=true
   local report=(--severity HIGH,CRITICAL --ignorefile "$HERE/.trivyignore.yaml")
   local common=("${report[@]}" --exit-code 1)
   # The chart is scanned rendered (above), so its folder is skipped in the plain file scan.
@@ -102,6 +115,15 @@ iac() {
   trivy config "${report[@]}" --format sarif --output "$REPORTS/trivy-helm.sarif" "$rendered"
   trivy config "${common[@]}" --skip-dirs infra/helm "$ROOT/infra"
   trivy config "${common[@]}" "$rendered"
+}
+
+# The alert rules are code too: syntax, then their unit tests (infra/observability/prometheus/tests).
+rules() {
+  section "Alert rules (promtool) and Alertmanager config (amtool)"
+  local prom=infra/observability/prometheus
+  run --entrypoint promtool "$PROMETHEUS" check rules "$ROOT/$prom"/rules/*.yml
+  run --entrypoint promtool "$PROMETHEUS" test rules "$ROOT/$prom"/tests/*.yml
+  run --entrypoint amtool "$ALERTMANAGER" check-config infra/observability/alertmanager/alertmanager.yml
 }
 
 image() {
@@ -155,6 +177,7 @@ case "${1:-all}" in
   image) image "${2:-}" ;;
   dast) dast "${2:-}" ;;
   api) api ;;
-  all) secrets; sast; deps; iac ;;
-  *) echo "usage: $0 secrets|sast|deps|iac|image <image>|dast <url>|api|all" >&2; exit 2 ;;
+  rules) rules ;;
+  all) secrets; sast; deps; iac; rules ;;
+  *) echo "usage: $0 secrets|sast|deps|iac|image <image>|dast <url>|api|rules|all" >&2; exit 2 ;;
 esac

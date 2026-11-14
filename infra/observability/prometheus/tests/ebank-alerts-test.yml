@@ -1,0 +1,58 @@
+# promtool test rules infra/observability/prometheus/tests/*.yml (run by infra/ci/security/scan.sh rules)
+rule_files:
+  - ../rules/ebank-alerts.yml
+
+evaluation_interval: 1m
+
+tests:
+  # One handler's dead-letter queue fills, the other's stays empty.
+  - interval: 1m
+    input_series:
+      - series: 'ebank_outbox_dead_letters{service="ebank-backend", handler="TransactionCompletedProjection"}'
+        values: '0 0 2x10'
+      - series: 'ebank_outbox_dead_letters{service="ebank-backend", handler="TransactionCompletedHandler"}'
+        values: '0x12'
+    alert_rule_test:
+      - eval_time: 10m
+        alertname: EbankOutboxDeadLetters
+        exp_alerts:
+          - exp_labels: { severity: warning, handler: TransactionCompletedProjection }
+            exp_annotations:
+              runbook_url: https://github.com/Samlogy/ebank-app-learn/blob/master/docs/runbooks/ebank-outbox-dead-letters.md
+              summary: "2 message(s) in the dead-letter queue of TransactionCompletedProjection"
+              description: That handler did not process these events. Fix the cause, then move them back to its queue.
+
+  # Normal rotation: the lease runs down to a few seconds, then a new one starts. No alert.
+  - interval: 30s
+    input_series:
+      - series: 'ebank_vault_database_credentials_expiry_seconds{service="ebank-backend"}'
+        values: '300 240 180 120 90 60 30 3600 3570 3540 3510 3480 3450 3420'
+    alert_rule_test:
+      - eval_time: 6m
+        alertname: EbankDbCredentialsExpiring
+        exp_alerts: []
+
+  # Vault stops answering: the lease runs out and no new user comes.
+  - interval: 1m
+    input_series:
+      - series: 'ebank_vault_database_credentials_expiry_seconds{service="ebank-backend"}'
+        values: '300 240 180 120 60 0 -60 -120 -180 -240'
+      - series: 'ebank_vault_database_credentials_rotations_total{service="ebank-backend", outcome="failure"}'
+        values: '0 0 1 2 3 4 5 6 7 8'
+    alert_rule_test:
+      - eval_time: 9m
+        alertname: EbankDbCredentialsExpiring
+        exp_alerts:
+          - exp_labels: { severity: critical, service: ebank-backend }
+            exp_annotations:
+              runbook_url: https://github.com/Samlogy/ebank-app-learn/blob/master/docs/runbooks/ebank-db-credentials.md
+              summary: The backend's database user expires within a minute, or has expired
+              description: When it does, every query fails. Vault is probably unreachable or refuses new credentials.
+      - eval_time: 5m
+        alertname: EbankDbCredentialsRotationFailing
+        exp_alerts:
+          - exp_labels: { severity: warning, service: ebank-backend, outcome: failure }
+            exp_annotations:
+              runbook_url: https://github.com/Samlogy/ebank-app-learn/blob/master/docs/runbooks/ebank-db-credentials.md
+              summary: Renewing or replacing the backend's database user fails
+              description: The current user still works until its lease ends. See the backend logs ("Vault database credentials").

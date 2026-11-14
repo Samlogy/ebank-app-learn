@@ -1,0 +1,103 @@
+{{- /*
+Outbox transport (rabbitmq.enabled): a single RabbitMQ node, used by the backend only. Its user is in
+the ebank-rabbitmq Secret: from Vault (ebank/<env>/rabbitmq) through ESO, or created beforehand.
+*/ -}}
+{{- if .Values.rabbitmq.enabled }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: rabbitmq
+  labels:
+    {{- include "ebank.labels" (dict "root" $ "name" "rabbitmq") | nindent 4 }}
+data:
+  # Same files as docker compose (infra/rabbitmq, linked into files/).
+  10-ebank.conf: |
+    {{- .Files.Get "files/rabbitmq/rabbitmq.conf" | nindent 4 }}
+  enabled_plugins: |
+    {{- .Files.Get "files/rabbitmq/enabled_plugins" | nindent 4 }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: rabbitmq
+  labels:
+    {{- include "ebank.labels" (dict "root" $ "name" "rabbitmq") | nindent 4 }}
+spec:
+  selector:
+    {{- include "ebank.selector" "rabbitmq" | nindent 4 }}
+  ports:
+    - { name: amqp, port: 5672, targetPort: amqp }
+    - { name: metrics, port: 15692, targetPort: metrics }
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: rabbitmq
+  labels:
+    {{- include "ebank.labels" (dict "root" $ "name" "rabbitmq") | nindent 4 }}
+  {{- with include "ebank.reloader" . }}
+  annotations:
+    {{- . | nindent 4 }}
+  {{- end }}
+spec:
+  serviceName: rabbitmq
+  replicas: 1
+  selector:
+    matchLabels:
+      {{- include "ebank.selector" "rabbitmq" | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "ebank.labels" (dict "root" $ "name" "rabbitmq") | nindent 8 }}
+      annotations:
+        checksum/config: {{ printf "%s%s" (.Files.Get "files/rabbitmq/rabbitmq.conf") (.Files.Get "files/rabbitmq/enabled_plugins") | sha256sum }}
+    spec:
+      {{- include "ebank.podSecurity" (dict "user" 999 "group" 999 "fsGroup" 999) | nindent 6 }}
+      containers:
+        - name: rabbitmq
+          image: {{ .Values.rabbitmq.image }}
+          env:
+            # A fixed node name: the data directory is named after it.
+            - { name: RABBITMQ_NODENAME, value: rabbit@localhost }
+            - name: RABBITMQ_DEFAULT_USER
+              valueFrom: { secretKeyRef: { name: ebank-rabbitmq, key: RABBITMQ_DEFAULT_USER } }
+            - name: RABBITMQ_DEFAULT_PASS
+              valueFrom: { secretKeyRef: { name: ebank-rabbitmq, key: RABBITMQ_DEFAULT_PASS } }
+          ports:
+            - { name: amqp, containerPort: 5672 }
+            - { name: metrics, containerPort: 15692 }
+          readinessProbe:
+            exec: { command: ["rabbitmq-diagnostics", "-q", "check_port_connectivity"] }
+            initialDelaySeconds: 10
+            periodSeconds: 10
+            timeoutSeconds: 10
+          livenessProbe:
+            exec: { command: ["rabbitmq-diagnostics", "-q", "check_running"] }
+            initialDelaySeconds: 60
+            periodSeconds: 30
+            timeoutSeconds: 15
+          resources:
+            {{- toYaml .Values.rabbitmq.resources | nindent 12 }}
+          # Read-only root: writes go to the data volume and /tmp (checked with the same flags in Docker).
+          {{- include "ebank.containerSecurity" (dict "readOnly" true) | nindent 10 }}
+          volumeMounts:
+            - { name: data, mountPath: /var/lib/rabbitmq }
+            - { name: config, mountPath: /etc/rabbitmq/conf.d/10-ebank.conf, subPath: 10-ebank.conf, readOnly: true }
+            - { name: config, mountPath: /etc/rabbitmq/enabled_plugins, subPath: enabled_plugins, readOnly: true }
+            - { name: tmp, mountPath: /tmp }
+      volumes:
+        - name: config
+          configMap: { name: rabbitmq }
+        - name: tmp
+          emptyDir: {}
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        {{- with .Values.rabbitmq.storageClassName }}
+        storageClassName: {{ . }}
+        {{- end }}
+        resources:
+          requests: { storage: {{ .Values.rabbitmq.storage }} }
+{{- end }}

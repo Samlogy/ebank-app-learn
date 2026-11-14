@@ -12,8 +12,8 @@ spring:
           jwk-set-uri: ${KEYCLOAK_JWK_SET_URI}
   datasource:
     url: ${DB_URL}
-    username: ${DB_USERNAME}
-    password: ${DB_PASSWORD}
+    username: ${VAULT_DB_USERNAME:${DB_USERNAME}}    # dynamic user from Vault first
+    password: ${VAULT_DB_PASSWORD:${DB_PASSWORD}}
   data:
     redis:
       host: ${REDIS_HOST}

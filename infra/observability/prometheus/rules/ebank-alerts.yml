@@ -1,6 +1,7 @@
 # Alerts on symptoms users or operators would notice. Metric names follow Micrometer's
 # Prometheus naming: dots become underscores, timers get _seconds, counters _total.
 # Every alert links to its runbook in docs/runbooks/: what it means, how to check, how to fix.
+# Error rate and latency are alerted on their error budget: see ebank-slo.yml.
 groups:
   - name: ebank-availability
     rules:
@@ -13,27 +14,6 @@ groups:
           runbook_url: https://github.com/Samlogy/ebank-app-learn/blob/master/docs/runbooks/ebank-backend-down.md
           summary: The EBANK backend is not answering Prometheus scrapes
           description: No ebank-backend target has been up for 2 minutes.
-
-      - alert: EbankHighErrorRate
-        expr: |
-          sum(rate(http_server_requests_seconds_count{service="ebank-backend", status=~"5.."}[5m]))
-            / sum(rate(http_server_requests_seconds_count{service="ebank-backend"}[5m])) > 0.05
-        for: 5m
-        labels: { severity: critical }
-        annotations:
-          runbook_url: https://github.com/Samlogy/ebank-app-learn/blob/master/docs/runbooks/ebank-high-error-rate.md
-          summary: More than 5% of API requests fail with a 5xx
-          description: "{{ $value | humanizePercentage }} of requests returned a server error over 5 minutes."
-
-      - alert: EbankSlowRequests
-        expr: |
-          histogram_quantile(0.95, sum by (le) (rate(http_server_requests_seconds_bucket{service="ebank-backend", uri!~"/actuator.*"}[5m]))) > 1
-        for: 10m
-        labels: { severity: warning }
-        annotations:
-          runbook_url: https://github.com/Samlogy/ebank-app-learn/blob/master/docs/runbooks/ebank-slow-requests.md
-          summary: 95th percentile API latency is above 1 s
-          description: "p95 latency is {{ $value | humanizeDuration }}."
 
       - alert: EbankHeapAlmostFull
         expr: |
@@ -76,6 +56,16 @@ groups:
           summary: "{{ $value }} outbox event(s) gave up after too many attempts"
           description: "Find them with SELECT * FROM outbox_event WHERE status = 'FAILED', fix the cause, then set them back to PENDING."
 
+      - alert: EbankOutboxDeadLetters
+        # RabbitMQ transport only: a handler gave up on messages after its retries.
+        expr: max by (handler) (ebank_outbox_dead_letters) > 0
+        for: 5m
+        labels: { severity: warning }
+        annotations:
+          runbook_url: https://github.com/Samlogy/ebank-app-learn/blob/master/docs/runbooks/ebank-outbox-dead-letters.md
+          summary: "{{ $value }} message(s) in the dead-letter queue of {{ $labels.handler }}"
+          description: That handler did not process these events. Fix the cause, then move them back to its queue.
+
       - alert: EbankNotificationDeliveryFailing
         expr: sum(increase(ebank_notifications_delivered_total{outcome="failed"}[15m])) > 5
         labels: { severity: warning }
@@ -101,3 +91,24 @@ groups:
         annotations:
           runbook_url: https://github.com/Samlogy/ebank-app-learn/blob/master/docs/runbooks/ebank-advisor-queue-slow.md
           summary: Customers wait more than 10 minutes on average for an advisor
+
+  - name: ebank-database-credentials
+    rules:
+      - alert: EbankDbCredentialsExpiring
+        # Dynamic credentials only (VAULT_DATABASE_ENABLED). A new user replaces the old one a few
+        # seconds before it expires; staying under a minute means the replacement does not come.
+        expr: ebank_vault_database_credentials_expiry_seconds < 60
+        for: 3m
+        labels: { severity: critical }
+        annotations:
+          runbook_url: https://github.com/Samlogy/ebank-app-learn/blob/master/docs/runbooks/ebank-db-credentials.md
+          summary: The backend's database user expires within a minute, or has expired
+          description: When it does, every query fails. Vault is probably unreachable or refuses new credentials.
+
+      - alert: EbankDbCredentialsRotationFailing
+        expr: increase(ebank_vault_database_credentials_rotations_total{outcome="failure"}[15m]) > 0
+        labels: { severity: warning }
+        annotations:
+          runbook_url: https://github.com/Samlogy/ebank-app-learn/blob/master/docs/runbooks/ebank-db-credentials.md
+          summary: Renewing or replacing the backend's database user fails
+          description: The current user still works until its lease ends. See the backend logs ("Vault database credentials").

@@ -1,0 +1,91 @@
+# promtool test rules infra/observability/prometheus/tests/*.yml (run by infra/ci/security/scan.sh rules)
+rule_files:
+  - ../rules/vault-alerts.yml
+
+evaluation_interval: 1m
+
+tests:
+  # Restarted without auto-unseal: answers scrapes, but sealed.
+  - interval: 1m
+    input_series:
+      - series: 'up{service="vault", instance="vault-0"}'
+        values: '1x10'
+      - series: 'vault_core_unsealed{service="vault", instance="vault-0"}'
+        values: '1 1 0 0 0 0 0 0 0 0'
+    alert_rule_test:
+      - eval_time: 5m
+        alertname: VaultSealed
+        exp_alerts:
+          - exp_labels: { severity: critical, service: vault, instance: vault-0 }
+            exp_annotations:
+              runbook_url: https://github.com/Samlogy/ebank-app-learn/blob/master/docs/runbooks/vault-unavailable.md
+              summary: Vault vault-0 is sealed
+              description: It needs unsealing (key holders), or the auto-unseal key is unreachable.
+      - eval_time: 5m
+        alertname: VaultDown
+        exp_alerts: []
+
+  # HA, three nodes: one is gone, so autopilot has no failure tolerance left.
+  - interval: 1m
+    input_series:
+      - series: 'up{service="vault-internal", instance="vault-0"}'
+        values: '1x20'
+      - series: 'up{service="vault-internal", instance="vault-1"}'
+        values: '1x20'
+      - series: 'up{service="vault-internal", instance="vault-2"}'
+        values: '1 1 0x18'
+      - series: 'vault_autopilot_failure_tolerance{instance="vault-0"}'
+        values: '1 1 0x18'
+      - series: 'vault_autopilot_healthy{instance="vault-0"}'
+        values: '1x20'
+    alert_rule_test:
+      - eval_time: 15m
+        alertname: VaultRaftUnhealthy
+        exp_alerts:
+          - exp_labels: { severity: warning }
+            exp_annotations:
+              runbook_url: https://github.com/Samlogy/ebank-app-learn/blob/master/docs/runbooks/vault-raft-unhealthy.md
+              summary: The Vault Raft cluster cannot lose another node
+              description: Autopilot reports an unhealthy node or no failure tolerance left.
+
+  # Standalone (dev, qua): a single node has no failure tolerance by design, nothing to alert on.
+  - interval: 1m
+    input_series:
+      - series: 'up{service="vault-internal", instance="vault-0"}'
+        values: '1x20'
+      - series: 'vault_autopilot_failure_tolerance{instance="vault-0"}'
+        values: '0x20'
+    alert_rule_test:
+      - eval_time: 15m
+        alertname: VaultRaftUnhealthy
+        exp_alerts: []
+
+  # The audit device starts failing: Vault refuses requests, page at once.
+  - interval: 1m
+    input_series:
+      - series: 'vault_audit_log_request_failure{instance="vault-0"}'
+        values: '0 0 0 2 5 9'
+    alert_rule_test:
+      - eval_time: 5m
+        alertname: VaultAuditLogFailing
+        exp_alerts:
+          - exp_labels: { severity: critical, instance: vault-0 }
+            exp_annotations:
+              runbook_url: https://github.com/Samlogy/ebank-app-learn/blob/master/docs/runbooks/vault-audit-failing.md
+              summary: Vault cannot write its audit log
+              description: Requests are being refused while the audit device fails.
+
+  - interval: 1m
+    input_series:
+      - series: 'externalsecret_status_condition{namespace="ebank-prod", name="ebank-postgres", condition="Ready", status="False"}'
+        values: '1x30'
+      - series: 'externalsecret_status_condition{namespace="ebank-prod", name="ebank-redis", condition="Ready", status="False"}'
+        values: '0x30'
+    alert_rule_test:
+      - eval_time: 20m
+        alertname: ExternalSecretSyncFailing
+        exp_alerts:
+          - exp_labels: { severity: warning, namespace: ebank-prod, name: ebank-postgres }
+            exp_annotations:
+              runbook_url: https://github.com/Samlogy/ebank-app-learn/blob/master/docs/runbooks/external-secret-sync-failing.md
+              summary: ExternalSecret ebank-prod/ebank-postgres does not sync

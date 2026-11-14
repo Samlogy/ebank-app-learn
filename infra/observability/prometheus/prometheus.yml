@@ -1,4 +1,5 @@
-# Local Prometheus. In k3s the same jobs come from pod annotations (see infra/helm/ebank).
+# Local Prometheus. In k3s, kube-prometheus-stack finds the same targets through ServiceMonitors
+# (infra/helm/ebank monitoring.*, infra/vault/k3s/vault-values.yaml) and loads the same rules.
 global:
   scrape_interval: 15s
   evaluation_interval: 15s
@@ -27,6 +28,21 @@ scrape_configs:
     static_configs:
       - targets: ["host.docker.internal:8080"]
         labels: { service: ebank-backend, runs_in: host }
+
+  # Vault's own metrics: sealed state, audit failures, leases (rules/vault-alerts.yml).
+  - job_name: vault
+    metrics_path: /v1/sys/metrics
+    params:
+      format: [prometheus]
+    static_configs:
+      - targets: ["vault:8202"]
+        labels: { service: vault }
+
+  # RabbitMQ, with --profile broker (rabbitmq_prometheus).
+  - job_name: rabbitmq
+    static_configs:
+      - targets: ["rabbitmq:15692"]
+        labels: { service: rabbitmq }
 
   - job_name: otel-collector
     static_configs:

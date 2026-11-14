@@ -1,0 +1,163 @@
+# Service level objectives of the API, alerted on error budget burn rate (multiwindow, multi-burn-rate,
+# as in the Google SRE workbook, chapter "Alerting on SLOs").
+#
+#   Availability  99.5% of API requests do not end in a 5xx              budget 0.5% over 30 days
+#   Latency       99%   of API requests complete within 1 s              budget 1%   over 30 days
+#
+# Actuator endpoints are not API traffic and are left out. The 1 s bucket exists because
+# application.yml adds it (management.metrics.distribution.slo.http.server.requests).
+#
+# A burn rate of 1 spends the whole budget in exactly 30 days. The four pairs below:
+#   14.4x over 1 h  (and 5 m)    2% of the budget in one hour     page
+#   6x    over 6 h  (and 30 m)   5% of the budget in six hours    page
+#   3x    over 1 d  (and 2 h)    10% of the budget in a day       ticket
+#   1x    over 3 d  (and 6 h)    10% of the budget in three days  ticket
+# The short window makes the alert stop soon after the problem is fixed.
+#
+# Below one request a minute over the last hour, a single error is a big share of the traffic:
+# the alerts wait for at least that much traffic. Tested by tests/ebank-slo-test.yml (promtool).
+groups:
+  - name: ebank-slo-recording
+    interval: 30s
+    rules:
+      # Request rate, all API requests.
+      - record: ebank:http_requests:rate5m
+        expr: sum(rate(http_server_requests_seconds_count{service="ebank-backend", uri!~"/actuator.*"}[5m]))
+      - record: ebank:http_requests:rate1h
+        expr: sum(rate(http_server_requests_seconds_count{service="ebank-backend", uri!~"/actuator.*"}[1h]))
+
+      # Share of requests that failed with a 5xx.
+      - record: ebank:http_requests_errors:ratio_rate5m
+        expr: |
+          sum(rate(http_server_requests_seconds_count{service="ebank-backend", uri!~"/actuator.*", status=~"5.."}[5m]))
+            / sum(rate(http_server_requests_seconds_count{service="ebank-backend", uri!~"/actuator.*"}[5m]))
+      - record: ebank:http_requests_errors:ratio_rate30m
+        expr: |
+          sum(rate(http_server_requests_seconds_count{service="ebank-backend", uri!~"/actuator.*", status=~"5.."}[30m]))
+            / sum(rate(http_server_requests_seconds_count{service="ebank-backend", uri!~"/actuator.*"}[30m]))
+      - record: ebank:http_requests_errors:ratio_rate1h
+        expr: |
+          sum(rate(http_server_requests_seconds_count{service="ebank-backend", uri!~"/actuator.*", status=~"5.."}[1h]))
+            / sum(rate(http_server_requests_seconds_count{service="ebank-backend", uri!~"/actuator.*"}[1h]))
+      - record: ebank:http_requests_errors:ratio_rate2h
+        expr: |
+          sum(rate(http_server_requests_seconds_count{service="ebank-backend", uri!~"/actuator.*", status=~"5.."}[2h]))
+            / sum(rate(http_server_requests_seconds_count{service="ebank-backend", uri!~"/actuator.*"}[2h]))
+      - record: ebank:http_requests_errors:ratio_rate6h
+        expr: |
+          sum(rate(http_server_requests_seconds_count{service="ebank-backend", uri!~"/actuator.*", status=~"5.."}[6h]))
+            / sum(rate(http_server_requests_seconds_count{service="ebank-backend", uri!~"/actuator.*"}[6h]))
+      - record: ebank:http_requests_errors:ratio_rate1d
+        expr: |
+          sum(rate(http_server_requests_seconds_count{service="ebank-backend", uri!~"/actuator.*", status=~"5.."}[1d]))
+            / sum(rate(http_server_requests_seconds_count{service="ebank-backend", uri!~"/actuator.*"}[1d]))
+      - record: ebank:http_requests_errors:ratio_rate3d
+        expr: |
+          sum(rate(http_server_requests_seconds_count{service="ebank-backend", uri!~"/actuator.*", status=~"5.."}[3d]))
+            / sum(rate(http_server_requests_seconds_count{service="ebank-backend", uri!~"/actuator.*"}[3d]))
+
+      # Share of requests slower than 1 s.
+      - record: ebank:http_requests_slow:ratio_rate5m
+        expr: |
+          1 - sum(rate(http_server_requests_seconds_bucket{service="ebank-backend", uri!~"/actuator.*", le="1.0"}[5m]))
+            / sum(rate(http_server_requests_seconds_count{service="ebank-backend", uri!~"/actuator.*"}[5m]))
+      - record: ebank:http_requests_slow:ratio_rate30m
+        expr: |
+          1 - sum(rate(http_server_requests_seconds_bucket{service="ebank-backend", uri!~"/actuator.*", le="1.0"}[30m]))
+            / sum(rate(http_server_requests_seconds_count{service="ebank-backend", uri!~"/actuator.*"}[30m]))
+      - record: ebank:http_requests_slow:ratio_rate1h
+        expr: |
+          1 - sum(rate(http_server_requests_seconds_bucket{service="ebank-backend", uri!~"/actuator.*", le="1.0"}[1h]))
+            / sum(rate(http_server_requests_seconds_count{service="ebank-backend", uri!~"/actuator.*"}[1h]))
+      - record: ebank:http_requests_slow:ratio_rate2h
+        expr: |
+          1 - sum(rate(http_server_requests_seconds_bucket{service="ebank-backend", uri!~"/actuator.*", le="1.0"}[2h]))
+            / sum(rate(http_server_requests_seconds_count{service="ebank-backend", uri!~"/actuator.*"}[2h]))
+      - record: ebank:http_requests_slow:ratio_rate6h
+        expr: |
+          1 - sum(rate(http_server_requests_seconds_bucket{service="ebank-backend", uri!~"/actuator.*", le="1.0"}[6h]))
+            / sum(rate(http_server_requests_seconds_count{service="ebank-backend", uri!~"/actuator.*"}[6h]))
+      - record: ebank:http_requests_slow:ratio_rate1d
+        expr: |
+          1 - sum(rate(http_server_requests_seconds_bucket{service="ebank-backend", uri!~"/actuator.*", le="1.0"}[1d]))
+            / sum(rate(http_server_requests_seconds_count{service="ebank-backend", uri!~"/actuator.*"}[1d]))
+      - record: ebank:http_requests_slow:ratio_rate3d
+        expr: |
+          1 - sum(rate(http_server_requests_seconds_bucket{service="ebank-backend", uri!~"/actuator.*", le="1.0"}[3d]))
+            / sum(rate(http_server_requests_seconds_count{service="ebank-backend", uri!~"/actuator.*"}[3d]))
+
+      # Budget left over the 30-day window, for the dashboard: 1 is untouched, 0 is spent, below 0 is over.
+      - record: ebank:slo_availability:budget_remaining_30d
+        expr: |
+          1 - (
+            sum(increase(http_server_requests_seconds_count{service="ebank-backend", uri!~"/actuator.*", status=~"5.."}[30d]))
+              / sum(increase(http_server_requests_seconds_count{service="ebank-backend", uri!~"/actuator.*"}[30d]))
+          ) / 0.005
+      - record: ebank:slo_latency:budget_remaining_30d
+        expr: |
+          1 - (
+            1 - sum(increase(http_server_requests_seconds_bucket{service="ebank-backend", uri!~"/actuator.*", le="1.0"}[30d]))
+              / sum(increase(http_server_requests_seconds_count{service="ebank-backend", uri!~"/actuator.*"}[30d]))
+          ) / 0.01
+
+  - name: ebank-slo-alerts
+    rules:
+      - alert: EbankAvailabilityBudgetBurn
+        expr: |
+          (
+            (ebank:http_requests_errors:ratio_rate1h > (14.4 * 0.005) and ebank:http_requests_errors:ratio_rate5m > (14.4 * 0.005))
+            or
+            (ebank:http_requests_errors:ratio_rate6h > (6 * 0.005) and ebank:http_requests_errors:ratio_rate30m > (6 * 0.005))
+          )
+          and on() ebank:http_requests:rate1h > 1/60
+        for: 2m
+        labels: { severity: critical, slo: availability }
+        annotations:
+          runbook_url: https://github.com/Samlogy/ebank-app-learn/blob/master/docs/runbooks/ebank-availability-budget-burn.md
+          summary: The API spends its error budget fast (5xx)
+          description: "{{ $value | humanizePercentage }} of API requests fail. At this rate the 30-day budget (0.5%) is gone in days."
+
+      - alert: EbankAvailabilityBudgetBurn
+        expr: |
+          (
+            (ebank:http_requests_errors:ratio_rate1d > (3 * 0.005) and ebank:http_requests_errors:ratio_rate2h > (3 * 0.005))
+            or
+            (ebank:http_requests_errors:ratio_rate3d > 0.005 and ebank:http_requests_errors:ratio_rate6h > 0.005)
+          )
+          and on() ebank:http_requests:rate1h > 1/60
+        for: 15m
+        labels: { severity: warning, slo: availability }
+        annotations:
+          runbook_url: https://github.com/Samlogy/ebank-app-learn/blob/master/docs/runbooks/ebank-availability-budget-burn.md
+          summary: The API slowly spends its error budget (5xx)
+          description: "{{ $value | humanizePercentage }} of API requests fail over a day or more: the 30-day budget (0.5%) will run out."
+
+      - alert: EbankLatencyBudgetBurn
+        expr: |
+          (
+            (ebank:http_requests_slow:ratio_rate1h > (14.4 * 0.01) and ebank:http_requests_slow:ratio_rate5m > (14.4 * 0.01))
+            or
+            (ebank:http_requests_slow:ratio_rate6h > (6 * 0.01) and ebank:http_requests_slow:ratio_rate30m > (6 * 0.01))
+          )
+          and on() ebank:http_requests:rate1h > 1/60
+        for: 2m
+        labels: { severity: critical, slo: latency }
+        annotations:
+          runbook_url: https://github.com/Samlogy/ebank-app-learn/blob/master/docs/runbooks/ebank-latency-budget-burn.md
+          summary: Too many API requests take more than 1 s
+          description: "{{ $value | humanizePercentage }} of API requests are slower than 1 s (budget: 1% over 30 days)."
+
+      - alert: EbankLatencyBudgetBurn
+        expr: |
+          (
+            (ebank:http_requests_slow:ratio_rate1d > (3 * 0.01) and ebank:http_requests_slow:ratio_rate2h > (3 * 0.01))
+            or
+            (ebank:http_requests_slow:ratio_rate3d > 0.01 and ebank:http_requests_slow:ratio_rate6h > 0.01)
+          )
+          and on() ebank:http_requests:rate1h > 1/60
+        for: 15m
+        labels: { severity: warning, slo: latency }
+        annotations:
+          runbook_url: https://github.com/Samlogy/ebank-app-learn/blob/master/docs/runbooks/ebank-latency-budget-burn.md
+          summary: API latency slowly spends its budget
+          description: "{{ $value | humanizePercentage }} of API requests are slower than 1 s over a day or more."

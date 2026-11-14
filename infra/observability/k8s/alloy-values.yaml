@@ -1,0 +1,78 @@
+# Grafana Alloy ships the logs of the EBANK namespaces to Loki (chart grafana/alloy 1.16.0):
+#   helm upgrade --install alloy grafana/alloy --version 1.16.0 -n monitoring -f infra/observability/k8s/alloy-values.yaml
+# It reads logs through the Kubernetes API (loki.source.kubernetes): no host path, no root, unlike
+# Filebeat in docker compose. One replica is enough for a few namespaces.
+controller:
+  type: deployment
+  replicas: 1
+
+alloy:
+  mounts:
+    varlog: false
+    dockercontainers: false
+  securityContext:
+    runAsNonRoot: true
+    allowPrivilegeEscalation: false
+    readOnlyRootFilesystem: true
+    capabilities: { drop: ["ALL"] }
+    seccompProfile: { type: RuntimeDefault }
+  resources:
+    requests: { cpu: 50m, memory: 128Mi }
+    limits: { memory: 512Mi }
+  configMap:
+    create: true
+    content: |
+      // Pods of the ebank-<env> namespaces.
+      discovery.kubernetes "pods" {
+        role = "pod"
+        namespaces {
+          names = ["ebank-dev", "ebank-qua", "ebank-prod"]
+        }
+      }
+
+      // Few labels, with low cardinality: what logs are searched by. The rest stays in the line.
+      discovery.relabel "pods" {
+        targets = discovery.kubernetes.pods.targets
+        rule {
+          source_labels = ["__meta_kubernetes_namespace"]
+          target_label  = "namespace"
+        }
+        rule {
+          source_labels = ["__meta_kubernetes_pod_label_app_kubernetes_io_name"]
+          target_label  = "app"
+        }
+        rule {
+          source_labels = ["__meta_kubernetes_pod_name"]
+          target_label  = "pod"
+        }
+        rule {
+          source_labels = ["__meta_kubernetes_pod_container_name"]
+          target_label  = "container"
+        }
+      }
+
+      loki.source.kubernetes "pods" {
+        targets    = discovery.relabel.pods.output
+        forward_to = [loki.process.ecs.receiver]
+      }
+
+      // The backend logs ECS JSON (qua, prod): its level becomes a label, its trace ID structured
+      // metadata (high cardinality, so not a label). Other lines go through unchanged.
+      loki.process "ecs" {
+        stage.json {
+          expressions = { level = "\"log.level\"", trace_id = "\"trace.id\"" }
+        }
+        stage.labels {
+          values = { level = "" }
+        }
+        stage.structured_metadata {
+          values = { trace_id = "" }
+        }
+        forward_to = [loki.write.default.receiver]
+      }
+
+      loki.write "default" {
+        endpoint {
+          url = "http://loki.monitoring:3100/loki/api/v1/push"
+        }
+      }

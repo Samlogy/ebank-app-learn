@@ -8,5 +8,6 @@
   "MAIL_HOST": "mailpit",
   "MAIL_PORT": "1025",
   "ELASTICSEARCH_URIS": "http://elasticsearch:9200",
-  "OTLP_TRACES_ENDPOINT": "http://otel-collector:4318/v1/traces"
+  "OTLP_TRACES_ENDPOINT": "http://otel-collector:4318/v1/traces",
+  "RABBITMQ_HOST": "rabbitmq"
 }

@@ -11,5 +11,6 @@
   "MAIL_FROM": "EBANK <noreply@ebank.local>",
   "ELASTICSEARCH_URIS": "http://elasticsearch:9200",
   "OTLP_TRACES_ENABLED": "false",
-  "OTLP_TRACES_ENDPOINT": "http://otel-collector.monitoring:4318/v1/traces"
+  "OTLP_TRACES_ENDPOINT": "http://otel-collector.monitoring:4318/v1/traces",
+  "RABBITMQ_HOST": "rabbitmq"
 }

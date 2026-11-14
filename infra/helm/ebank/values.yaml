@@ -10,6 +10,9 @@ image:
   registry: docker.io/ebank
   tag: ""
   pullPolicy: IfNotPresent
+  # Image name -> verified digest (deploy.sh sets them once the cosign signature is checked).
+  # A digest wins over the tag: what runs is exactly what was signed.
+  digests: {}
 
 # Public host names. The issuer, CORS origin and Keycloak hostname are derived from them,
 # with https when ingress.tls.enabled is true, http otherwise.
@@ -47,6 +50,14 @@ vault:
   kubernetesAuthPath: kubernetes
   # How often External Secrets Operator re-reads Vault.
   refreshInterval: 15m
+  # Namespace of the Vault servers: with database.enabled, they open connections to PostgreSQL.
+  namespace: vault
+  # Dynamic PostgreSQL credentials: the backend gets a database user of its own from
+  # database/creds/ebank-<env>-backend instead of DB_USERNAME / DB_PASSWORD. Run
+  # infra/vault/k3s/enable-dynamic-db.sh <env> once before turning it on.
+  database:
+    enabled: false
+    mount: database
 
 # Secrets. With create: false (qua, prod) they must exist before the install, never from git:
 #   kubectl -n <ns> create secret generic ebank-backend-secrets --from-env-file=backend.env
@@ -58,6 +69,7 @@ secrets:
   postgres: {}
   keycloak: {}
   backend: {}
+  rabbitmq: {}          # with rabbitmq.enabled: RABBITMQ_DEFAULT_USER, RABBITMQ_DEFAULT_PASS
 
 backend:
   # One replica on purpose: the STOMP broker, user presence and the assistant's per-conversation
@@ -82,6 +94,7 @@ backend:
     MAIL_HOST: smtp.example
     MAIL_PORT: "587"
     MAIL_FROM: "EBANK <noreply@ebank.example>"
+    RABBITMQ_HOST: rabbitmq              # used with rabbitmq.enabled only
   resources:
     requests: { cpu: 500m, memory: 768Mi }
     limits: { memory: 1Gi }
@@ -130,6 +143,32 @@ redis:
   resources:
     requests: { cpu: 50m, memory: 64Mi }
     limits: { memory: 256Mi }
+
+# Outbox transport. Off: events are delivered in-process. On: the backend publishes them to this
+# RabbitMQ (one queue per handler, dead-letter queues) and EBANK_OUTBOX_RABBITMQ_ENABLED is set.
+# Needs the ebank-rabbitmq Secret (RABBITMQ_DEFAULT_USER, RABBITMQ_DEFAULT_PASS: from Vault
+# ebank/<env>/rabbitmq with configSource vault) and RABBITMQ_USERNAME / RABBITMQ_PASSWORD for the
+# backend (backend/secrets in Vault, or ebank-backend-secrets).
+rabbitmq:
+  enabled: false
+  image: rabbitmq:4.3.7-alpine
+  storage: 2Gi
+  storageClassName: ""
+  resources:
+    requests: { cpu: 100m, memory: 256Mi }
+    limits: { memory: 512Mi }
+
+# kube-prometheus-stack (infra/observability/k8s/kube-prometheus-stack-values.yaml): ServiceMonitors
+# for the backend (and RabbitMQ), the alert rules of infra/observability/prometheus/rules as
+# PrometheusRules, and the Grafana dashboards. Needs the operator's CRDs, so off by default.
+monitoring:
+  enabled: false
+  # Extra labels on the ServiceMonitors, PrometheusRules and dashboards, if the Prometheus only
+  # selects some (the values in infra/observability/k8s select all).
+  labels: {}
+  # The Vault and External Secrets rules are about the cluster, not one release: keep them in one
+  # release per cluster.
+  vaultRules: true
 
 # Elasticsearch and Mailpit inside the cluster, for dev only. qua and prod use managed services.
 devServices:

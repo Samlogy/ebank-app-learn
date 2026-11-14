@@ -1,0 +1,100 @@
+# promtool test rules infra/observability/prometheus/tests/*.yml (run by infra/ci/security/scan.sh rules)
+rule_files:
+  - ../rules/ebank-slo.yml
+
+evaluation_interval: 1m
+
+tests:
+  # 10 requests/s, 10% of them 5xx for two hours: 20x the budget, so the page fires, and the ticket too.
+  - interval: 1m
+    input_series:
+      - series: 'http_server_requests_seconds_count{service="ebank-backend", uri="/api/v1/accounts", status="200"}'
+        values: '0+540x120'
+      - series: 'http_server_requests_seconds_count{service="ebank-backend", uri="/api/v1/accounts", status="500"}'
+        values: '0+60x120'
+      - series: 'http_server_requests_seconds_bucket{service="ebank-backend", uri="/api/v1/accounts", status="200", le="1.0"}'
+        values: '0+540x120'
+      - series: 'http_server_requests_seconds_bucket{service="ebank-backend", uri="/api/v1/accounts", status="500", le="1.0"}'
+        values: '0+60x120'
+    promql_expr_test:
+      - expr: ebank:http_requests_errors:ratio_rate1h
+        eval_time: 90m
+        exp_samples:
+          - labels: 'ebank:http_requests_errors:ratio_rate1h'
+            value: 0.1
+    alert_rule_test:
+      - eval_time: 90m
+        alertname: EbankAvailabilityBudgetBurn
+        exp_alerts:
+          - exp_labels: { severity: critical, slo: availability }
+            exp_annotations:
+              runbook_url: https://github.com/Samlogy/ebank-app-learn/blob/master/docs/runbooks/ebank-availability-budget-burn.md
+              summary: The API spends its error budget fast (5xx)
+              description: "10% of API requests fail. At this rate the 30-day budget (0.5%) is gone in days."
+          - exp_labels: { severity: warning, slo: availability }
+            exp_annotations:
+              runbook_url: https://github.com/Samlogy/ebank-app-learn/blob/master/docs/runbooks/ebank-availability-budget-burn.md
+              summary: The API slowly spends its error budget (5xx)
+              description: "10% of API requests fail over a day or more: the 30-day budget (0.5%) will run out."
+      # Every request answered within 1 s.
+      - eval_time: 90m
+        alertname: EbankLatencyBudgetBurn
+        exp_alerts: []
+
+  # 0.2% errors: inside the 0.5% budget, nothing fires. Actuator 5xx are not API traffic.
+  - interval: 1m
+    input_series:
+      - series: 'http_server_requests_seconds_count{service="ebank-backend", uri="/api/v1/transfers", status="200"}'
+        values: '0+598.8x240'
+      - series: 'http_server_requests_seconds_count{service="ebank-backend", uri="/api/v1/transfers", status="503"}'
+        values: '0+1.2x240'
+      - series: 'http_server_requests_seconds_count{service="ebank-backend", uri="/actuator/health", status="503"}'
+        values: '0+600x240'
+    alert_rule_test:
+      - eval_time: 4h
+        alertname: EbankAvailabilityBudgetBurn
+        exp_alerts: []
+
+  # Very little traffic (one request every two minutes, half of them failing): no page on noise.
+  - interval: 1m
+    input_series:
+      - series: 'http_server_requests_seconds_count{service="ebank-backend", uri="/api/v1/accounts", status="200"}'
+        values: '0+0.25x120'
+      - series: 'http_server_requests_seconds_count{service="ebank-backend", uri="/api/v1/accounts", status="500"}'
+        values: '0+0.25x120'
+    alert_rule_test:
+      - eval_time: 90m
+        alertname: EbankAvailabilityBudgetBurn
+        exp_alerts: []
+
+  # 20% of requests slower than 1 s for an hour: latency page. No 5xx, so no availability alert.
+  - interval: 1m
+    input_series:
+      - series: 'http_server_requests_seconds_count{service="ebank-backend", uri="/api/v1/transfers", status="201"}'
+        values: '0+600x90'
+      - series: 'http_server_requests_seconds_bucket{service="ebank-backend", uri="/api/v1/transfers", status="201", le="1.0"}'
+        values: '0+480x90'
+    promql_expr_test:
+      # 1 - 0.8 is not exactly 0.2 in floating point.
+      - expr: round(ebank:http_requests_slow:ratio_rate1h, 0.0001)
+        eval_time: 80m
+        exp_samples:
+          - labels: '{}'
+            value: 0.2
+    alert_rule_test:
+      - eval_time: 80m
+        alertname: EbankLatencyBudgetBurn
+        exp_alerts:
+          - exp_labels: { severity: critical, slo: latency }
+            exp_annotations:
+              runbook_url: https://github.com/Samlogy/ebank-app-learn/blob/master/docs/runbooks/ebank-latency-budget-burn.md
+              summary: Too many API requests take more than 1 s
+              description: "20% of API requests are slower than 1 s (budget: 1% over 30 days)."
+          - exp_labels: { severity: warning, slo: latency }
+            exp_annotations:
+              runbook_url: https://github.com/Samlogy/ebank-app-learn/blob/master/docs/runbooks/ebank-latency-budget-burn.md
+              summary: API latency slowly spends its budget
+              description: "20% of API requests are slower than 1 s over a day or more."
+      - eval_time: 80m
+        alertname: EbankAvailabilityBudgetBurn
+        exp_alerts: []

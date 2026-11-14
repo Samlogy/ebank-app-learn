@@ -388,6 +388,19 @@ call GET "/api/v1/transactions" "$BOB" | head -1 | jq '[.items[] | {status, send
 call GET /api/v1/transactions/TXN00000000000000000000000000000000 "$ALICE"   # 404 TRANSACTION_NOT_FOUND (IDs au format TXN...)
 ```
 
+### Export du ledger (admin, journées clôturées)
+
+Les écritures du jour ne sont pas exportables (`to` doit être avant aujourd'hui, UTC) : pour voir des lignes, exporter une période passée qui en contient, ou vieillir des écritures en base (dev uniquement : `UPDATE ledger_entries SET created_at = created_at - interval '1 day';`).
+
+```bash
+YESTERDAY=$(date -u -d yesterday +%F); TODAY=$(date -u +%F)
+curl -s -D - -H "Authorization: Bearer $ADMIN" "$API/api/v1/ledger/export?from=$YESTERDAY&to=$YESTERDAY" | head -8
+                                               # 200 text/csv, X-Ledger-Entry-Count, en-tête entry_id,...,booked_at
+call GET "/api/v1/ledger/export?from=$YESTERDAY&to=$YESTERDAY" "$ALICE"     # 403 FORBIDDEN
+call GET "/api/v1/ledger/export?from=$YESTERDAY&to=$TODAY" "$ADMIN"        # 422 DAY_NOT_CLOSED
+call GET "/api/v1/ledger/export?from=2026-01-01&to=2026-03-01" "$ADMIN"    # 422 RANGE_TOO_LONG (31 jours max)
+```
+
 ### Fermer un compte (règle inter-modules)
 
 ```bash
@@ -579,10 +592,23 @@ psql "SELECT action, changed_by FROM account_history ORDER BY changed_at DESC LI
 ```
 
 
+### Outbox via RabbitMQ (optionnel)
+
+```bash
+EBANK_OUTBOX_RABBITMQ_ENABLED=true docker compose -f infra/compose/docker-compose.yml --profile app --profile broker up -d --build --wait
+curl -s $API/actuator/health | jq .status                                   # UP : le broker compte dans la santé
+# faire un virement (2.4), puis :
+docker compose -f infra/compose/docker-compose.yml exec rabbitmq rabbitmqctl -q list_queues name messages
+                                               # une file ebank.<handler> par handler, et sa .dlq (vides si tout va bien)
+psql "SELECT event_type, status FROM outbox_event ORDER BY occurred_at DESC LIMIT 3;"   # PUBLISHED dès la confirmation du broker
+```
+
 ## 2.9 Observabilité
 
 ```bash
 curl -s $API/actuator/prometheus | grep -E '^ebank_(outbox|notifications|security|chatbot)' | head -20
+curl -s $API/actuator/prometheus | grep -E 'http_server_requests_seconds_bucket.*le="1.0"' | head -3   # le seuil du SLO de latence
+infra/ci/security/scan.sh rules       # règles d'alerte : syntaxe + tests promtool (SLO, Vault, dead letters)
 curl -s $API/actuator/health/liveness
 docker compose -f infra/compose/docker-compose.yml --profile observability up -d --wait
 # Prometheus :9090, Grafana :3000 (admin/admin), Jaeger :16686 (backend avec OTLP_TRACES_ENABLED=true), Kibana :5601
@@ -606,9 +632,9 @@ cd front-web && npx ng test --watch=false
 |---|---|
 | 400 | `VALIDATION_FAILED` (liste `violations`), header manquant, page > 100 |
 | 401 | `UNAUTHORIZED` |
-| 403 | `FORBIDDEN` (rôle manquant : activate, deposit, overview, advisor ; chemin hors `/api`) |
+| 403 | `FORBIDDEN` (rôle manquant : activate, deposit, overview, ledger export, advisor ; chemin hors `/api`) |
 | 404 | `ACCOUNT_NOT_FOUND`, `TRANSACTION_NOT_FOUND`, `NOTIFICATION_NOT_FOUND`, `CONVERSATION_NOT_FOUND` (aussi pour les ressources d'autrui) |
 | 409 | `INVALID_ACCOUNT_STATUS`, `ACCOUNT_BALANCE_NOT_ZERO`, `CONCURRENT_MODIFICATION`, `ALREADY_ASSIGNED` |
-| 422 | `INVALID_AMOUNT`, `UNSUPPORTED_CURRENCY`, `CURRENCY_MISMATCH`, `CURRENCY_TYPE_MISMATCH`, `SAME_ACCOUNT`, `ACCOUNT_NOT_ACTIVE`, `RECEIVER_NOT_AVAILABLE`, `INSUFFICIENT_FUNDS`, `IDEMPOTENCY_KEY_REUSED`, `INVALID_RANGE`, `RANGE_TOO_LONG`, `INVALID_LIMIT` |
+| 422 | `INVALID_AMOUNT`, `UNSUPPORTED_CURRENCY`, `CURRENCY_MISMATCH`, `CURRENCY_TYPE_MISMATCH`, `SAME_ACCOUNT`, `ACCOUNT_NOT_ACTIVE`, `RECEIVER_NOT_AVAILABLE`, `INSUFFICIENT_FUNDS`, `IDEMPOTENCY_KEY_REUSED`, `INVALID_RANGE`, `RANGE_TOO_LONG`, `INVALID_LIMIT`, `DAY_NOT_CLOSED` |
 | 429 | rate limit du chat |
 | 503 | `ANALYTICS_UNAVAILABLE`, `SERVICE_UNAVAILABLE` |

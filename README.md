@@ -32,7 +32,7 @@ This README describes how the project works today. For the design rationale and 
 | `ebank-common`, `ebank-auth`, `ebank-accounts`, `ebank-transactions` | Implemented and tested |
 | `ebank-notifications` | Implemented and tested: stored notifications, REST API, live push over WebSocket/STOMP, email fallback for offline users |
 | `ebank-analytics` | Implemented and tested: transaction events projected into Elasticsearch, per-user summary, timeline and counterparties, admin overview |
-| Transactional outbox | Implemented in `ebank-common`, delivered by an in-process relay (no broker yet). Each handler succeeds or fails on its own. |
+| Transactional outbox | Implemented in `ebank-common`. Delivered by an in-process relay by default, or through RabbitMQ (one queue per handler, dead-letter queues) when turned on. Each handler succeeds or fails on its own. |
 | Front end: sign-in, accounts, transactions, profile, theming | Implemented against the real API |
 | Front end: notifications | On the notifications API, pushed live over STOMP, read state stored by the backend, email and SMS preferences |
 | Front end: chat | On the chat API and STOMP: assistant, handoff, read receipts. Advisor console at `/advisor`. Text only until attachments exist in the backend (phase 8c). |
@@ -41,12 +41,14 @@ This README describes how the project works today. For the design rationale and 
 | `ebank-chatbot` | Implemented and tested (phases 7 and 8b): Claude assistant with read-only tools, advisor handoff, queue, live text chat, read receipts |
 | `ebank-realtime` | The one STOMP connection per user, shared by notifications and chat |
 | Chat files, audio messages, 1:1 calls (phases 8c and 8d) | Not implemented: no MinIO, ClamAV, coturn or WebRTC signaling yet |
-| Message broker (Kafka or RabbitMQ), SMS provider | Not implemented. SMS is a logging stub. |
+| Message broker | RabbitMQ as an optional outbox transport (`EBANK_OUTBOX_RABBITMQ_ENABLED`), off by default. No STOMP broker relay yet, so still one backend replica. |
+| SMS provider | Not implemented. SMS is a logging stub. |
+| Ledger export | Admin CSV export of the entries of closed days (`GET /api/v1/ledger/export`) |
 | Redis | Rate limits for the chat. Configured as the Spring cache, which no code uses yet. |
-| `infra/observability` | Prometheus with alert rules, Alertmanager (alerts emailed to Mailpit locally), runbooks in [docs/runbooks](docs/runbooks), Grafana dashboard, OpenTelemetry collector and Jaeger, ELK for logs (compose profile `observability`) |
+| `infra/observability` | Prometheus with alert rules (unit-tested with promtool) and SLO burn-rate alerts, Alertmanager (alerts emailed to Mailpit locally), runbooks in [docs/runbooks](docs/runbooks), Grafana dashboard, OpenTelemetry collector and Jaeger, ELK for logs (compose profile `observability`). In k3s: kube-prometheus-stack, Loki and Alloy ([infra/observability/k8s](infra/observability/k8s)). |
 | `infra/helm` | Helm chart for k3s, with dev, qua and prod values |
-| `infra/vault` | Vault holds the config and secrets of every environment: the backend reads it with Spring Cloud Vault, External Secrets Operator serves the other pods. Compose runs a dev Vault seeded from git. |
-| `infra/ci` | Jenkins pipeline, SonarQube, security scans (gitleaks, Semgrep, Trivy, OWASP ZAP), SBOMs |
+| `infra/vault` | Vault holds the config and secrets of every environment: the backend reads it with Spring Cloud Vault, External Secrets Operator serves the other pods ([ADR 0001](docs/adr/0001-vault-single-source.md)). Compose runs a dev Vault seeded from git. Optional: dynamic PostgreSQL credentials; prod: three servers and transit auto-unseal; metrics and alerts. |
+| `infra/ci` | Jenkins pipeline, SonarQube, security scans (gitleaks, Semgrep, Trivy, OWASP ZAP), SBOMs, image signing with cosign once a key is set up |
 
 ## Tech stack
 
@@ -168,11 +170,13 @@ Domain modules use the same package layout: `api` (public), `application`, `doma
 │   ├── compose/              docker-compose.yml for local development
 │   ├── docker/               Dockerfiles and nginx config
 │   ├── keycloak/realms/      Versioned "ebank" realm, applied by keycloak-config-cli on every start and deploy
-│   ├── helm/ebank/           Helm chart for k3s: templates/, values.yaml, values-{dev,qua,prod}.yaml
-│   ├── vault/                Vault layout: policies, per-environment config, apply.sh, k3s install values
-│   ├── ci/                   jenkins/ (Jenkinsfile, agent), sonarqube/, security/ (scan.sh and rules)
-│   ├── observability/        prometheus/, grafana/, otel/, elk/
+│   ├── helm/ebank/           Helm chart for k3s: templates/, values.yaml, values-{dev,qua,prod}.yaml, files/ (links to shared config)
+│   ├── vault/                Vault layout: policies, per-environment config, apply.sh, database/, k3s install values and scripts
+│   ├── rabbitmq/             RabbitMQ config, shared by compose and the chart
+│   ├── ci/                   jenkins/ (Jenkinsfile, agent), sonarqube/, security/ (scan.sh and rules), cosign/, deploy and signing scripts
+│   ├── observability/        prometheus/ (rules and their tests), alertmanager/, grafana/, otel/, elk/, k8s/ (kube-prometheus-stack, Loki, Alloy)
 │   └── scripts/              End-to-end test scripts and a STOMP client
+├── docs/                     adr/ (architecture decisions), runbooks/, manual test guide
 └── project.md                Design decisions and roadmap
 ```
 
@@ -282,6 +286,8 @@ Shared settings are in [application.yml](backend/ebank-app/src/main/resources/ap
 | `VAULT_ROLE`, `VAULT_KUBERNETES_PATH`, `VAULT_KUBERNETES_TOKEN_FILE` | `ebank-backend`, `kubernetes`, the default service account token | Kubernetes auth. The chart projects a token for the `vault` audience. |
 | `EBANK_ENV` | `dev` | Environment folder in Vault: `local`, `dev`, `qua` or `prod` |
 | `VAULT_FAIL_FAST` | `false` in `dev`, `true` in `qua` and `prod` | Refuse to start when Vault can't be read |
+| `VAULT_DATABASE_ENABLED` | `false` | Dynamic PostgreSQL credentials: a database user of its own from `database/creds/<role>`, renewed hourly and replaced before it expires. They come as `VAULT_DB_USERNAME` / `VAULT_DB_PASSWORD`, which the profiles read before `DB_USERNAME` / `DB_PASSWORD`. See [infra/vault/README.md](infra/vault/README.md#dynamic-database-credentials). |
+| `VAULT_DATABASE_ROLE`, `VAULT_DATABASE_MOUNT` | `ebank-<EBANK_ENV>-backend`, `database` | Role and mount of the database engine |
 
 ### Environment variables
 
@@ -310,6 +316,9 @@ Shared settings are in [application.yml](backend/ebank-app/src/main/resources/ap
 | `ELASTICSEARCH_URIS` | Yes | `http://localhost:9200` | Analytics store |
 | `ANTHROPIC_API_KEY` | Yes | Empty: scripted assistant | Claude API key for the chat assistant. Without it in `dev`, a keyword-based assistant answers with the same tools. |
 | `ELASTICSEARCH_USERNAME` / `ELASTICSEARCH_PASSWORD` | Yes | Not used | Elasticsearch credentials |
+| `EBANK_OUTBOX_RABBITMQ_ENABLED` | No, defaults to `false` | `false` | Deliver outbox events through RabbitMQ instead of in-process ([Outbox transports](#outbox-transports)) |
+| `RABBITMQ_HOST`, `RABBITMQ_PORT`, `RABBITMQ_VHOST`, `RABBITMQ_SSL_ENABLED` | With the RabbitMQ transport | `localhost`, `5672`, `/`, `false` | Broker address |
+| `RABBITMQ_USERNAME` / `RABBITMQ_PASSWORD` | With the RabbitMQ transport | `guest` / `guest` (RabbitMQ only accepts them from localhost) | Broker credentials |
 
 Two issuer settings are needed because browsers and containers reach Keycloak at different addresses. Tokens always name `http://localhost:8180` as their issuer, while the backend container fetches keys from `http://keycloak:8080`.
 
@@ -448,6 +457,19 @@ The base path is `/api/v1`, and every endpoint needs a bearer token. Swagger UI 
 
 Search filters can be combined: `transactionId`, `accountId` (sender or receiver), `sender` and `receiver`.
 
+### Ledger export
+
+| Method | Path | Description | Access |
+|---|---|---|---|
+| `GET` | `/ledger/export?from=yyyy-MM-dd&to=yyyy-MM-dd` | Every ledger entry booked on these UTC days, as CSV, oldest first | **Admin only** |
+
+For accounting and reconciliation. Only closed days (up to yesterday, UTC) and at most 31 days: entries are never changed, so two exports of the same range are identical. Columns: `entry_id,transfer_id,transaction_id,account_id,type,amount,currency,booked_at`; debits and credits balance for every transfer and deposit. The `X-Ledger-Entry-Count` header gives the number of rows. Rows are streamed from a database cursor, so a long range does not load into memory. Errors (422): `INVALID_RANGE`, `RANGE_TOO_LONG`, `DAY_NOT_CLOSED`. Each export is logged with the admin's user ID.
+
+```bash
+curl -H "Authorization: Bearer $ADMIN_TOKEN" -o ledger.csv \
+  "http://localhost:8080/api/v1/ledger/export?from=2026-11-01&to=2026-11-13"
+```
+
 Example transfer:
 
 ```bash
@@ -522,7 +544,7 @@ All take `from` and `to` as inclusive UTC days (`yyyy-MM-dd`), the last 30 days 
 
 **How it works.** The `TransactionCompleted` and `TransactionCancelled` events are projected into the `ebank-transactions` alias (index `ebank-transactions-v1`, strict mapping, separate from log indices). There is one document per transaction ID, so a redelivered event overwrites itself. Amounts are stored as `long` minor units (cents, satoshis), so sums are exact up to 2^53 minor units. Documents carry account IDs and user IDs, but never the free-text reference or any name or email. A user only matches documents listing them in `participants`, and a refused transfer only lists its sender. Figures are eventually consistent, about 1–2 s behind the ledger. Elasticsearch being down never blocks transfers or notifications: the analytics handler retries on its own.
 
-**Rebuilding.** The index is a projection. To rebuild it, delete it and replay the events still in the outbox (published events are kept 7 days). A full rebuild from the ledger would need an export API in `transactions`, which doesn't exist yet.
+**Rebuilding.** The index is a projection. To rebuild it, delete it and replay the events still in the outbox (published events are kept 7 days). Older figures can be checked against the [ledger export](#ledger-export); rebuilding the index from it is not automated.
 
 ### Chat
 
@@ -576,6 +598,17 @@ Flyway owns the schema, and Hibernate only validates it (`ddl-auto: validate`).
 The outbox delivers **at least once**: handlers must be idempotent. Each handler runs in its own transaction, together with its row in `outbox_event_handled`, so handlers are independent. If analytics fails, notifications are still committed, and the retry only re-runs analytics. An event becomes `PUBLISHED` once all its handlers have succeeded. Failures are retried with exponential backoff (2 s, 4 s, ... up to 15 min). Events are claimed with `FOR UPDATE SKIP LOCKED` plus a 5-minute lease, so several instances can run the relay and no lock is held while handlers run. Only the exception type is stored in `last_error`, never its message.
 
 To retry an event marked `FAILED` after fixing the cause: `UPDATE outbox_event SET status = 'PENDING', attempts = 0, next_attempt_at = now() WHERE id = '...';`
+
+### Outbox transports
+
+| | In-process (default) | RabbitMQ (`EBANK_OUTBOX_RABBITMQ_ENABLED=true`) |
+|---|---|---|
+| Delivery | `OutboxRelay` calls the handlers | `RabbitOutboxPublisher` publishes to the topic exchange `ebank.events` (routing key: the event type); each handler consumes its own quorum queue `ebank.<handler class>` |
+| `PUBLISHED` means | every handler succeeded | the broker confirmed the message (publisher confirms) |
+| A handler fails | the event is retried with back-off, up to 10 times, then `FAILED` | the message is retried 5 times (1 s, 2 s, 4 s, 8 s), then moves to `ebank.<handler class>.dlq` (`ebank_outbox_dead_letters{handler}`, alert `EbankOutboxDeadLetters`) |
+| Duplicates | skipped through `outbox_event_handled` | the same: a redelivered message is acknowledged without running the handler again |
+
+Both share the claim (`FOR UPDATE SKIP LOCKED` and lease), the back-off and the idempotency table, in `OutboxStore`. RabbitMQ only matters once handlers move to other services (a service consumes its queue), or when the broker should absorb bursts instead of PostgreSQL. With it on, `/actuator/health` includes the broker. Locally: `EBANK_OUTBOX_RABBITMQ_ENABLED=true docker compose --profile app --profile broker up -d --build --wait`; in k3s: `rabbitmq.enabled: true` (a single RabbitMQ node, user from Vault `ebank/<env>/rabbitmq`).
 
 `transfers` and `ledger_entries` store account IDs as plain values with no foreign key to `accounts`, because modules don't reach into each other's tables.
 
@@ -635,9 +668,11 @@ Run these from `backend/`:
 |---|---|---|
 | Unit | `src/test` in each module | Domain rules and services |
 | Architecture | `ModuleBoundariesTest` in `ebank-app` | Module boundaries, see [Module boundaries](#module-boundaries) |
-| Integration | `AccountsIT`, `TransfersIT`, `NotificationsIT`, `AnalyticsIT`, `OutboxIT`, `ChatIT` in `ebank-app` | Full HTTP and STOMP requests against a real PostgreSQL through Testcontainers. `AnalyticsIT` also starts Elasticsearch. Other ITs run with `ebank.analytics.enabled=false`. |
+| Integration | `AccountsIT`, `TransfersIT`, `LedgerExportIT`, `NotificationsIT`, `AnalyticsIT`, `OutboxIT`, `OutboxRabbitIT`, `ChatIT` in `ebank-app` | Full HTTP and STOMP requests against a real PostgreSQL through Testcontainers. `AnalyticsIT` also starts Elasticsearch, `OutboxRabbitIT` RabbitMQ (queues per handler, retries, dead-letter queue, redeliveries). Other ITs run with `ebank.analytics.enabled=false`. |
 | Real Keycloak | `KeycloakIT` | The versioned realm in a real Keycloak 26.8: real signed tokens, issuer and JWKS, the `ebank-api` audience (another audience is 401), realm roles (CUSTOMER 403 / ADMIN 200), `sub` as the user ID, and a tampered signature |
 | Vault | `VaultConfigIT` | The Vault part of `application.yml` against a real Vault: paths, precedence of environment variables, policy limits, Vault off, fail-fast |
+| Dynamic database credentials | `DynamicDatabaseCredentialsIT` | Real Vault and PostgreSQL, with `infra/vault/database/setup.sql`, the role and the backend policy from the repository: a schema migrated by the static user handed over to `ebank_app`, the backend on its own user, the switch to a new user at `max_ttl` without a failed query, the old user dropped, the lease revoked on shutdown |
+| SLO metrics | `SloMetricsIT` | The `le="1.0"` and `le="0.5"` buckets the latency SLO counts on exist in `/actuator/prometheus` |
 | API contract | `OpenApiSpecIT` | Writes the served OpenAPI document to `target/openapi/ebank-api.json`, for `scan.sh api` |
 
 The integration tests include concurrency scenarios: simultaneous debits never overdraw an account, opposite transfers don't deadlock, and simultaneous retries with one key move money once. They replace Keycloak with a test JWT decoder, except `KeycloakIT`, which covers the real token flow.
@@ -696,19 +731,23 @@ The tests create their own users through the Keycloak Admin API, plus the dev-on
 | Logs | Plain text in `dev`, ECS JSON on stdout in `qua`, `prod` and the compose backend, with `traceId` for jumping to the trace |
 | Traces | OpenTelemetry over OTLP to the collector, then Jaeger. Metrics and logs are deliberately not sent over OTLP. |
 
-`ebank_*` metrics: `security_rejections_total{status}`, `outbox_events{status}`, `outbox_oldest_pending_seconds`, `notifications_recorded_total{type}`, `notifications_delivered_total{channel,outcome}`, `websocket_sessions`, `analytics_indexed_total{status}`, `chatbot_messages_total{sender}`, `chatbot_assistant_replies_total{outcome}`, `chatbot_tool_calls_total{tool,outcome}`, `chatbot_handoffs_total{reason}`, `chatbot_queue_wait_seconds`, `chatbot_llm_latency_seconds`.
+`ebank_*` metrics: `security_rejections_total{status}`, `outbox_events{status}`, `outbox_oldest_pending_seconds`, `outbox_dead_letters{handler}` (RabbitMQ transport), `vault_database_credentials_expiry_seconds`, `vault_database_credentials_rotations_total{outcome}` (dynamic credentials), `notifications_recorded_total{type}`, `notifications_delivered_total{channel,outcome}`, `websocket_sessions`, `analytics_indexed_total{status}`, `chatbot_messages_total{sender}`, `chatbot_assistant_replies_total{outcome}`, `chatbot_tool_calls_total{tool,outcome}`, `chatbot_handoffs_total{reason}`, `chatbot_queue_wait_seconds`, `chatbot_llm_latency_seconds`.
 
 Locally, `docker compose --profile observability up -d --wait` starts the stack from [infra/observability](infra/observability):
 
 | Service | URL | What |
 |---|---|---|
-| Prometheus | http://localhost:9090 | Scrapes the backend in compose or on the host, and evaluates [ebank-alerts.yml](infra/observability/prometheus/rules/ebank-alerts.yml): backend down, 5xx rate, latency, heap, 401/403 spikes, outbox backlog or failures, notification failures, assistant unavailable, slow advisor queue |
+| Prometheus | http://localhost:9090 | Scrapes the backend in compose or on the host, Vault and RabbitMQ, and evaluates [the rules](infra/observability/prometheus/rules): backend down, heap, 401/403 spikes, outbox backlog, failures or dead letters, notification failures, assistant unavailable, slow advisor queue, database credentials ([ebank-alerts.yml](infra/observability/prometheus/rules/ebank-alerts.yml)); error and latency budgets ([ebank-slo.yml](infra/observability/prometheus/rules/ebank-slo.yml)); Vault and External Secrets ([vault-alerts.yml](infra/observability/prometheus/rules/vault-alerts.yml)) |
 | Alertmanager | http://localhost:9093 | Receives Prometheus alerts, groups them, holds back the consequences of `EbankBackendDown`, and emails them to `ops@ebank.local` in Mailpit (http://localhost:8025) |
 | Grafana | http://localhost:3000 (`admin` / `admin`) | Provisioned data sources (Prometheus, Alertmanager, Jaeger, logs) and the "EBANK overview" dashboard |
 | Jaeger | http://localhost:16686 | Traces. Set `OTLP_TRACES_ENABLED=true` for the backend. |
 | Kibana | http://localhost:5601 | Data views `ebank-logs-*` (logs, via Filebeat and Logstash) and `ebank-transactions` (analytics) |
 
-Every alert has a `runbook_url` annotation pointing to its page in [docs/runbooks](docs/runbooks): what it means, how to check, how to fix and when to escalate. Add a page whenever you add an alert.
+Every alert has a `runbook_url` annotation pointing to its page in [docs/runbooks](docs/runbooks): what it means, how to check, how to fix and when to escalate. Add a page whenever you add an alert, and a case to [the promtool tests](infra/observability/prometheus/tests) (`scan.sh rules`).
+
+**Service level objectives.** 99.5% of API requests without a 5xx and 99% within 1 s, over 30 days (actuator excluded; the 1 s histogram bucket is added in `application.yml`). Alerts fire on the error budget's burn rate, over a long and a short window at once (Google SRE workbook): `critical` when the month's budget would be gone in about two days (14.4x over 1 h, 6x over 6 h), `warning` when it would run out within the month (3x over 1 day, 1x over 3 days). Below one request a minute they stay silent. `ebank:slo_*:budget_remaining_30d` gives what is left. They replace the former fixed-threshold 5xx and p95 alerts.
+
+**Kubernetes.** [infra/observability/k8s](infra/observability/k8s) has the values for kube-prometheus-stack (Prometheus, Alertmanager, Grafana), Loki and Alloy. With `monitoring.enabled: true` the chart adds ServiceMonitors, the same rule files as PrometheusRules and the dashboard, and the Vault chart its own ServiceMonitor. Logs go to Loki there (Alloy reads them through the Kubernetes API, no root or host path); compose keeps ELK.
 
 Filebeat reads the logs of containers labelled `ebank-logs=true` (the compose backend). It needs root and the Docker socket, so it is for local use only. `/actuator/prometheus` needs no token because scrapers don't have one, so keep port 8081 private in `qua` and `prod`.
 
@@ -725,7 +764,7 @@ Both images use multi-stage builds, run as non-root users and are built by Compo
 
 [infra/helm/ebank](infra/helm/ebank) is a Helm 3 chart: PostgreSQL, Redis, Keycloak, backend, front end and a Traefik ingress, plus Elasticsearch and Mailpit when `devServices.enabled` is true (dev only). [values.yaml](infra/helm/ebank/values.yaml) holds the production-like defaults, and each environment overrides what differs in `values-dev.yaml`, `values-qua.yaml` or `values-prod.yaml`.
 
-Every environment takes its config and secrets from Vault (`configSource: vault` in `values-{dev,qua,prod}.yaml`). Install Vault, External Secrets Operator and Reloader once, unseal Vault and apply the environment's layout as described in [infra/vault/README.md](infra/vault/README.md). For `qua` and `prod`, also write their secrets in Vault by hand. Then:
+Every environment takes its config and secrets from Vault (`configSource: vault` in `values-{dev,qua,prod}.yaml`). Install Vault, External Secrets Operator and Reloader once, unseal Vault and apply the environment's layout as described in [infra/vault/README.md](infra/vault/README.md) (prod: three servers and transit auto-unseal, `vault-values-ha.yaml`). For `qua` and `prod`, also write their secrets in Vault by hand. For metrics, alerts and logs in the cluster, install [infra/observability/k8s](infra/observability/k8s) first and set `monitoring.enabled: true`. Then:
 
 ```bash
 # dev: plain HTTP on *.ebank.localhost, realm imported
@@ -750,6 +789,10 @@ helm -n ebank-prod rollback ebank <revision>                               # go 
 | `ingress.tls.enabled`, `ingress.tls.clusterIssuer` | `true`, empty | HTTPS on the `websecure` entrypoint; a cert-manager issuer adds the annotation. |
 | `configSource` | `chart` (`vault` in the environment files) | `vault`: the backend reads Vault itself, and External Secrets Operator creates `ebank-postgres`, `ebank-redis`, `ebank-keycloak` and `ebank-front-web-config`. `chart`: the ConfigMap and hand-made Secrets of earlier versions. |
 | `vault.address`, `vault.env`, `vault.refreshInterval` | `http://vault.vault:8200`, per file, `15m` | Where Vault is, the environment folder and roles (`ebank-<env>-backend`, `ebank-<env>-eso`), and how often ESO re-reads it |
+| `vault.database.enabled`, `vault.namespace` | `false`, `vault` | Dynamic PostgreSQL credentials for the backend (run `infra/vault/k3s/enable-dynamic-db.sh <env>` first); a NetworkPolicy lets the Vault pods reach PostgreSQL |
+| `rabbitmq.enabled` | `false` | RabbitMQ as the outbox transport: a single node, `ebank-rabbitmq` Secret from Vault (`ebank/<env>/rabbitmq`), backend credentials in `backend/secrets` |
+| `monitoring.enabled`, `monitoring.vaultRules` | `false`, `true` | ServiceMonitors, PrometheusRules and dashboards for kube-prometheus-stack; the Vault rules in one release per cluster only |
+| `image.digests` | empty | Image name to digest; set by `deploy.sh` once the cosign signature is verified, and preferred over the tag |
 | `secrets.create` | `false` | `configSource: chart` only: `true` creates the three Secrets from `secrets.postgres`, `secrets.keycloak`, `secrets.backend`. |
 | `backend.config` | see `values.yaml` | `configSource: chart`: the keys of the `ebank-backend-config` ConfigMap. With Vault, only `SPRING_PROFILES_ACTIVE` is used. |
 | `backend.actuatorPort` | `management` | Probe and scrape port: `http` in dev, where actuator has no separate port. |
@@ -776,13 +819,14 @@ In `configSource: chart`, `ebank-backend-secrets` holds `DB_USERNAME`, `DB_PASSW
 3. SonarQube analysis and quality gate.
 4. SAST, dependency, IaC and API contract checks in parallel.
 5. Image build and scan.
-6. On `master` only, the images built once are promoted unchanged: push, **deploy dev**, OWASP ZAP baseline on dev, **deploy qua**, approval, **deploy prod**.
+6. On `master` only, the images built once are promoted unchanged: push, sign (once a key is set up, see [Image signing](#image-signing)), **deploy dev**, OWASP ZAP baseline on dev, **deploy qua**, approval, **deploy prod**.
 
 Each deploy is [infra/ci/deploy.sh](infra/ci/deploy.sh) `<env>`, which can also be run by hand:
 
 | Step | What happens | On failure |
 |---|---|---|
 | Vault | AppRole login (a 10-minute token that can only write this environment's config), then `infra/vault/apply.sh <env> --config-only` writes `infra/vault/<env>/*-config.json` | Stops before anything is deployed |
+| Signatures | With `infra/ci/cosign/cosign.pub` committed: each image must have a valid signature and SBOM attestation, and is deployed by the verified digest | Stops before anything is deployed |
 | Helm | `helm upgrade --install --atomic` with `values-<env>.yaml`, the image tag and the realm | Helm rolls back on its own if the pods don't get ready in time |
 | Realm | The `keycloak-config` Job applies the realm | Fails the upgrade, so Helm rolls back |
 | Smoke test | [smoke-test.sh](infra/ci/smoke-test.sh), from inside the cluster: backend health with database, Redis and Vault, `401` without a token, Keycloak realm and signing keys, the front end's `/config.json`. `SMOKE_URL` adds a check through the ingress. | `helm rollback` to the previous revision, and the stage fails |
@@ -799,9 +843,24 @@ These paths (the `--atomic` rollback, the rollback after a failed smoke test, Ap
 | `scan.sh iac` | Helm, Trivy | `helm lint --strict`, then Dockerfiles, compose, and the chart rendered for each environment, one resource per file. Accepted findings, each with a reason, are in [.trivyignore.yaml](infra/ci/security/.trivyignore.yaml). |
 | `scan.sh image <image>` | Trivy | OS packages and JARs of a built image |
 | `scan.sh dast <url>` | OWASP ZAP | Passive baseline scan with [rules.tsv](infra/ci/security/zap/rules.tsv) |
+| `scan.sh rules` | promtool, amtool | Alert rules: syntax and [unit tests](infra/observability/prometheus/tests) (burn rates, Vault, dead letters, credentials); the local Alertmanager config |
 | `scan.sh api` | openapi-diff | [backend/openapi/ebank-api.json](backend/openapi/ebank-api.json) must match what the backend serves (run `./mvnw verify` first), so every API change shows in the pull request. It must also stay backward compatible with `origin/master` (the previous commit on `master`). After an intended change: `cp backend/ebank-app/target/openapi/ebank-api.json backend/openapi/`. A breaking change needs a new API version. |
 
 The SBOM goal needs online mode: an offline build (`mvn -o`) silently skips it. To try SonarQube locally, start it with `docker compose -f infra/ci/sonarqube/compose.yml up -d`; the host needs `vm.max_map_count` of at least 262144.
+
+### Image signing
+
+[cosign](https://github.com/sigstore/cosign) signs the images after the push and attaches their CycloneDX SBOM as a signed attestation ([sign-images.sh](infra/ci/sign-images.sh)); `deploy.sh` verifies both and deploys the verified digest, so a tag moved in the registry afterwards changes nothing. Signatures are made with a key pair and no public transparency log ([signing-config.json](infra/ci/cosign/signing-config.json) lists no Rekor): nothing about the images is published, and verification works offline.
+
+It turns on when the public key is committed. Once, by a release manager:
+
+```bash
+cosign generate-key-pair                    # asks for a password; writes cosign.key and cosign.pub
+mv cosign.pub infra/ci/cosign/cosign.pub    # commit it (reviewed: it decides what may run)
+# In Jenkins: "cosign-key" (secret file: cosign.key), "cosign-password" (secret text). Then delete cosign.key.
+```
+
+The check is only in the pipeline: someone with `kubectl` access can still run an unsigned image. To enforce it in the cluster as well, add an admission policy (Kyverno `verifyImages` or Sigstore's policy-controller) with the same public key.
 
 ### Front-end security headers
 

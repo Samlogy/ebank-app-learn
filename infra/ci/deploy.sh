@@ -13,6 +13,8 @@
 #   VAULT_SERVICE                default vault/vault: namespace/service reached by port-forward
 #   SMOKE_URL                    optional: also check the front end through the ingress
 #   HELM_TIMEOUT                 default 10m
+# With infra/ci/cosign/cosign.pub in the repository, both images must carry a valid signature and
+# SBOM attestation (infra/ci/sign-images.sh), and are deployed by the digest that was verified.
 # Uses the current kubectl context: CI points KUBECONFIG at the environment's cluster.
 set -euo pipefail
 
@@ -41,10 +43,27 @@ export VAULT_TOKEN
 vault token revoke -self >/dev/null 2>&1 || true
 unset VAULT_TOKEN
 
-echo "== Helm: $IMAGE_TAG to $NS"
-previous=$(helm -n "$NS" history ebank --max 1 -o json 2>/dev/null | jq -r '.[0].revision // empty' || true)
 # The realm goes with every release: the keycloak-config Job applies it after the upgrade.
 extra=(--set-file "keycloak.realm=$ROOT/infra/keycloak/realms/ebank-realm.json")
+
+PUBLIC_KEY=$ROOT/infra/ci/cosign/cosign.pub
+if [[ -f "$PUBLIC_KEY" ]]; then
+  echo "== Signatures"
+  for image in ebank-backend ebank-front-web; do
+    # The digest that carries a valid signature: Helm deploys it, so a tag moved afterwards changes nothing.
+    digest=$(cosign verify --key "$PUBLIC_KEY" --insecure-ignore-tlog=true "$REGISTRY/$image:$IMAGE_TAG" |
+      jq -r '.[0].critical.image."docker-manifest-digest"')
+    cosign verify-attestation --key "$PUBLIC_KEY" --insecure-ignore-tlog=true --type cyclonedx \
+      "$REGISTRY/$image@$digest" >/dev/null
+    echo "  $image@$digest: signature and SBOM attestation verified"
+    extra+=(--set "image.digests.$image=$digest")
+  done
+else
+  echo "== Signatures: not checked (no infra/ci/cosign/cosign.pub yet)"
+fi
+
+echo "== Helm: $IMAGE_TAG to $NS"
+previous=$(helm -n "$NS" history ebank --max 1 -o json 2>/dev/null | jq -r '.[0].revision // empty' || true)
 helm upgrade --install ebank "$ROOT/infra/helm/ebank" \
   --namespace "$NS" --create-namespace \
   -f "$ROOT/infra/helm/ebank/values-$ENV.yaml" "${extra[@]}" \

@@ -36,9 +36,29 @@ spring:
         default-context: ${EBANK_ENV:dev}/backend/secrets
         # No per-profile paths: the environment is already in the path.
         profiles: ""
+      # Dynamic PostgreSQL credentials, off unless VAULT_DATABASE_ENABLED=true: a database user of
+      # its own from database/creds/<role>, renewed while the backend runs and replaced before it
+      # expires (com.ebank.config.VaultDatabaseCredentials). They arrive as VAULT_DB_USERNAME and
+      # VAULT_DB_PASSWORD, which the profiles read before DB_USERNAME and DB_PASSWORD: a static user
+      # left in backend/secrets is then ignored. See infra/vault/README.md.
+      database:
+        enabled: ${VAULT_DATABASE_ENABLED:false}
+        role: ${VAULT_DATABASE_ROLE:ebank-${EBANK_ENV:dev}-backend}
+        backend: ${VAULT_DATABASE_MOUNT:database}
+        username-property: VAULT_DB_USERNAME
+        password-property: VAULT_DB_PASSWORD
+      config:
+        lifecycle:
+          # Revokes its leases on shutdown through sys/leases/revoke-prefix/<lease>, which the
+          # backend policy allows for its own role only.
+          lease-endpoints: LeasesRevokedByPrefix
   threads:
     virtual:
       enabled: true
+  # Streamed responses (the ledger CSV export) may take longer than the container's 30 s default.
+  mvc:
+    async:
+      request-timeout: 5m
 
   # Keycloak access tokens. Issuer and key URLs are set per profile.
   security:
@@ -74,6 +94,30 @@ spring:
     connection-timeout: 2s
     socket-timeout: 5s
 
+  # Outbox over RabbitMQ, only with ebank.outbox.rabbitmq.enabled=true (EBANK_OUTBOX_RABBITMQ_ENABLED).
+  # Without it nothing connects to a broker. Credentials come from Vault (backend/secrets).
+  rabbitmq:
+    host: ${RABBITMQ_HOST:localhost}
+    port: ${RABBITMQ_PORT:5672}
+    username: ${RABBITMQ_USERNAME:guest}
+    password: ${RABBITMQ_PASSWORD:guest}
+    virtual-host: ${RABBITMQ_VHOST:/}
+    ssl:
+      enabled: ${RABBITMQ_SSL_ENABLED:false}
+    # An event is PUBLISHED once the broker confirms it is stored (RabbitOutboxPublisher).
+    publisher-confirm-type: correlated
+    listener:
+      simple:
+        prefetch: 10
+        # A handler that keeps failing: 5 attempts with back-off, then the dead-letter queue.
+        default-requeue-rejected: false
+        retry:
+          enabled: true
+          max-retries: 4
+          initial-interval: 1s
+          multiplier: 2
+          max-interval: 30s
+
   # Fallback emails for offline users. The host is set per profile: no host, no email channel.
   mail:
     properties:
@@ -89,9 +133,12 @@ ebank:
       - /actuator/health/**
       - /actuator/info
       - /actuator/prometheus
-  # Transactional outbox, delivered in-process until a broker is added.
+  # Transactional outbox. Delivered in-process by default; through RabbitMQ (one queue per handler,
+  # dead-letter queues) with rabbitmq.enabled. See README "Outbox transports".
   outbox:
     relay-enabled: true
+    rabbitmq:
+      enabled: false
     poll-interval-ms: 1000
     batch-size: 50
     max-attempts: 10
@@ -136,6 +183,10 @@ management:
     web:
       exposure:
         include: health,info,prometheus,metrics,loggers
+  # The broker only counts in health when the outbox uses it.
+  health:
+    rabbit:
+      enabled: ${ebank.outbox.rabbitmq.enabled}
   endpoint:
     health:
       show-details: never
@@ -145,6 +196,9 @@ management:
     distribution:
       percentiles-histogram:
         http.server.requests: true
+      # Exact buckets for the latency SLO (infra/observability/prometheus/rules/ebank-slo.yml).
+      slo:
+        http.server.requests: 500ms, 1s
   observations:
     key-values:
       application: ${spring.application.name}
