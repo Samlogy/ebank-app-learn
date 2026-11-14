@@ -9,15 +9,8 @@
     <meta name="theme-color" media="(prefers-color-scheme: light)" content="#ffffff" />
     <meta name="theme-color" media="(prefers-color-scheme: dark)" content="#181e1b" />
     <link rel="icon" type="image/x-icon" href="favicon.ico" />
-    <script>
-      // Runs before first paint so a saved theme never flashes the device theme.
-      try {
-        var theme = localStorage.getItem('ebank.theme');
-        if (theme === 'light' || theme === 'dark') {
-          document.documentElement.setAttribute('data-theme', theme);
-        }
-      } catch (e) {}
-    </script>
+    <!-- Applies a saved theme before first paint. A file, not an inline script, so the CSP needs no 'unsafe-inline'. -->
+    <script src="theme-init.js"></script>
   </head>
   <body>
     <app-root

@@ -22,6 +22,7 @@ GITLEAKS=zricethezav/gitleaks:v8.28.0
 SEMGREP=semgrep/semgrep:1.141.0
 TRIVY=aquasec/trivy:0.67.2
 ZAP=ghcr.io/zaproxy/zaproxy:2.16.1
+HELM=alpine/helm:3.19.0
 
 # The same path inside the container as outside, so reports and paths match in Jenkins agents too.
 # Tools run as the calling user: no root-owned files left in the workspace.
@@ -79,9 +80,9 @@ iac() {
   for env in dev qua prod; do
     local values=(-f "$chart/values-$env.yaml")
     [[ "$env" == dev ]] && values+=(--set-file keycloak.realm=infra/keycloak/realms/ebank-realm.json)
-    docker run --rm "${USER_FLAGS[@]}" -v "$ROOT:$ROOT" -w "$ROOT" alpine/helm:3.19.0 \
+    docker run --rm "${USER_FLAGS[@]}" -v "$ROOT:$ROOT" -w "$ROOT" "$HELM" \
       lint --strict "$chart" "${values[@]}"
-    docker run --rm "${USER_FLAGS[@]}" -v "$ROOT:$ROOT" -w "$ROOT" alpine/helm:3.19.0 \
+    docker run --rm "${USER_FLAGS[@]}" -v "$ROOT:$ROOT" -w "$ROOT" "$HELM" \
       template ebank "$chart" --namespace "ebank-$env" "${values[@]}" \
       | awk -v dir="$rendered" -v env="$env" '
           function flush() { if (doc != "") { file = dir "/" env "-" tolower(kind) "-" name ".yaml"; printf "%s", doc > file; close(file) } doc = ""; kind = ""; name = "" }

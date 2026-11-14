@@ -31,6 +31,11 @@ spec:
         - name: front-web
           image: {{ include "ebank.image" (dict "root" $ "image" .Values.frontWeb.image) }}
           imagePullPolicy: {{ .Values.image.pullPolicy }}
+          # Origins allowed by the Content-Security-Policy (see infra/docker/front-web/templates).
+          env:
+            - { name: EBANK_API_ORIGIN, value: "{{ include "ebank.scheme" . }}://{{ .Values.hosts.api }}" }
+            - { name: EBANK_WS_ORIGIN, value: "{{ ternary "wss" "ws" .Values.ingress.tls.enabled }}://{{ .Values.hosts.api }}" }
+            - { name: EBANK_AUTH_ORIGIN, value: "{{ include "ebank.scheme" . }}://{{ .Values.hosts.auth }}" }
           ports:
             - { name: http, containerPort: 8080 }
           readinessProbe:

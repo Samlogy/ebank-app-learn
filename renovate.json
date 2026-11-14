@@ -1,0 +1,115 @@
+{
+  "$schema": "https://docs.renovatebot.com/renovate-schema.json",
+  "description": "Dependency updates as pull requests. Every version in the repo is pinned, so nothing updates on its own: Renovate proposes the bumps and CI checks them.",
+  "extends": [
+    "config:recommended",
+    ":dependencyDashboard",
+    ":semanticCommits"
+  ],
+  "timezone": "Europe/Paris",
+  "schedule": [
+    "before 6am on monday"
+  ],
+  "prConcurrentLimit": 5,
+  "labels": [
+    "dependencies"
+  ],
+  "packageRules": [
+    {
+      "description": "Majors one by one, only after approval in the dependency dashboard: they often need code changes.",
+      "matchUpdateTypes": [
+        "major"
+      ],
+      "dependencyDashboardApproval": true,
+      "labels": [
+        "dependencies",
+        "major"
+      ]
+    },
+    {
+      "description": "Minor and patch bumps grouped per ecosystem, so a week is a few PRs, not dozens.",
+      "matchManagers": [
+        "maven",
+        "maven-wrapper"
+      ],
+      "matchUpdateTypes": [
+        "minor",
+        "patch"
+      ],
+      "groupName": "backend (Maven) minor and patch"
+    },
+    {
+      "matchManagers": [
+        "npm"
+      ],
+      "matchUpdateTypes": [
+        "minor",
+        "patch"
+      ],
+      "groupName": "front-web (npm) minor and patch"
+    },
+    {
+      "description": "Container images used by compose, the Dockerfiles, the Helm chart and the CI scanners.",
+      "matchDatasources": [
+        "docker"
+      ],
+      "matchUpdateTypes": [
+        "minor",
+        "patch"
+      ],
+      "groupName": "container images minor and patch"
+    },
+    {
+      "description": "The JDK and Node versions are set by the images; keep Java on 21 and Node on even (LTS) majors.",
+      "matchDatasources": [
+        "docker"
+      ],
+      "matchPackageNames": [
+        "eclipse-temurin"
+      ],
+      "allowedVersions": "/^21\\./"
+    },
+    {
+      "matchDatasources": [
+        "docker"
+      ],
+      "matchPackageNames": [
+        "node"
+      ],
+      "allowedVersions": "/^\\d*[02468]\\./"
+    }
+  ],
+  "vulnerabilityAlerts": {
+    "labels": [
+      "dependencies",
+      "security"
+    ],
+    "schedule": [
+      "at any time"
+    ]
+  },
+  "customManagers": [
+    {
+      "description": "Third-party images in the Helm values, written as image: <name>:<tag>.",
+      "customType": "regex",
+      "managerFilePatterns": [
+        "/^infra/helm/ebank/values.*\\.yaml$/"
+      ],
+      "matchStrings": [
+        "image:\\s+(?<depName>[a-z0-9./-]+):(?<currentValue>[A-Za-z0-9._-]+)\\s"
+      ],
+      "datasourceTemplate": "docker"
+    },
+    {
+      "description": "Scanner images in scan.sh, written as NAME=<image>:<tag>.",
+      "customType": "regex",
+      "managerFilePatterns": [
+        "/^infra/ci/security/scan\\.sh$/"
+      ],
+      "matchStrings": [
+        "^[A-Z]+=(?<depName>[a-z0-9./-]+):(?<currentValue>[A-Za-z0-9._-]+)$"
+      ],
+      "datasourceTemplate": "docker"
+    }
+  ]
+}

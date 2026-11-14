@@ -1,0 +1,18 @@
+# Security headers for every page and asset. The origins come from the container environment:
+#   EBANK_API_ORIGIN   backend, e.g. https://api.ebank.example   (REST)
+#   EBANK_WS_ORIGIN    backend, e.g. wss://api.ebank.example     (STOMP on /ws)
+#   EBANK_AUTH_ORIGIN  Keycloak, e.g. https://auth.ebank.example (token calls, silent SSO iframe)
+#
+# script-src 'self': no inline script anywhere (theme-init.js and silent-check-sso.js are files, and
+#   the build does not inline critical CSS, which would add an onload handler).
+# style-src 'unsafe-inline': Angular inserts component styles as <style> elements at runtime.
+# frame-ancestors 'self': only the app frames itself (the silent SSO iframe); no clickjacking.
+add_header Content-Security-Policy "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self'; media-src 'self' blob:; connect-src 'self' ${EBANK_API_ORIGIN} ${EBANK_WS_ORIGIN} ${EBANK_AUTH_ORIGIN}; frame-src 'self' ${EBANK_AUTH_ORIGIN}; frame-ancestors 'self'; form-action 'self' ${EBANK_AUTH_ORIGIN}; base-uri 'self'; object-src 'none'" always;
+add_header X-Content-Type-Options "nosniff" always;
+add_header X-Frame-Options "SAMEORIGIN" always;
+add_header Referrer-Policy "no-referrer" always;
+# The chat records voice messages, so the microphone stays allowed for the app itself.
+add_header Permissions-Policy "camera=(), geolocation=(), payment=(), usb=(), microphone=(self)" always;
+# Ignored by browsers over plain HTTP (local dev), enforced once served over TLS.
+add_header Strict-Transport-Security "max-age=31536000; includeSubDomains" always;
+add_header Cross-Origin-Opener-Policy "same-origin" always;

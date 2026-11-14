@@ -9,6 +9,7 @@
   "resetPasswordAllowed": true,
   "verifyEmail": true,
   "bruteForceProtected": true,
+  "passwordPolicy": "length(12) and maxLength(128) and notUsername and notEmail and notContainsUsername and passwordHistory(3) and hashIterations(210000)",
   "sslRequired": "external",
   "accessTokenLifespan": 300,
   "revokeRefreshToken": true,

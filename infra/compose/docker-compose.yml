@@ -185,6 +185,24 @@ services:
       timeout: 3s
       retries: 12
 
+  alertmanager:
+    profiles: [observability]
+    image: prom/alertmanager:v0.29.0
+    command: ["--config.file=/etc/alertmanager/alertmanager.yml", "--storage.path=/alertmanager"]
+    volumes:
+      - ../observability/alertmanager/alertmanager.yml:/etc/alertmanager/alertmanager.yml:ro
+      - alertmanager-data:/alertmanager
+    depends_on:
+      mailpit:
+        condition: service_started
+    ports:
+      - "127.0.0.1:9093:9093"
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:9093/-/ready"]
+      interval: 10s
+      timeout: 3s
+      retries: 12
+
   grafana:
     profiles: [observability]
     image: grafana/grafana:12.2.1
@@ -275,6 +293,7 @@ services:
 
 volumes:
   prometheus-data:
+  alertmanager-data:
   grafana-data:
   elasticsearch-data:
   postgres-data:

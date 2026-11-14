@@ -1,5 +1,6 @@
 # Alerts on symptoms users or operators would notice. Metric names follow Micrometer's
 # Prometheus naming: dots become underscores, timers get _seconds, counters _total.
+# Every alert links to its runbook in docs/runbooks/: what it means, how to check, how to fix.
 groups:
   - name: ebank-availability
     rules:
@@ -9,6 +10,7 @@ groups:
         for: 2m
         labels: { severity: critical }
         annotations:
+          runbook_url: https://github.com/Samlogy/ebank-app-learn/blob/master/docs/runbooks/ebank-backend-down.md
           summary: The EBANK backend is not answering Prometheus scrapes
           description: No ebank-backend target has been up for 2 minutes.
 
@@ -19,6 +21,7 @@ groups:
         for: 5m
         labels: { severity: critical }
         annotations:
+          runbook_url: https://github.com/Samlogy/ebank-app-learn/blob/master/docs/runbooks/ebank-high-error-rate.md
           summary: More than 5% of API requests fail with a 5xx
           description: "{{ $value | humanizePercentage }} of requests returned a server error over 5 minutes."
 
@@ -28,6 +31,7 @@ groups:
         for: 10m
         labels: { severity: warning }
         annotations:
+          runbook_url: https://github.com/Samlogy/ebank-app-learn/blob/master/docs/runbooks/ebank-slow-requests.md
           summary: 95th percentile API latency is above 1 s
           description: "p95 latency is {{ $value | humanizeDuration }}."
 
@@ -38,6 +42,7 @@ groups:
         for: 10m
         labels: { severity: warning }
         annotations:
+          runbook_url: https://github.com/Samlogy/ebank-app-learn/blob/master/docs/runbooks/ebank-heap-almost-full.md
           summary: JVM heap above 90% on {{ $labels.instance }}
 
   - name: ebank-security
@@ -48,6 +53,7 @@ groups:
         for: 5m
         labels: { severity: warning }
         annotations:
+          runbook_url: https://github.com/Samlogy/ebank-app-learn/blob/master/docs/runbooks/ebank-auth-rejection-spike.md
           summary: Unusually many {{ $labels.status }} responses
           description: "{{ $value | humanize }} rejections per second over 5 minutes."
 
@@ -58,6 +64,7 @@ groups:
         for: 5m
         labels: { severity: warning }
         annotations:
+          runbook_url: https://github.com/Samlogy/ebank-app-learn/blob/master/docs/runbooks/ebank-outbox-backlog.md
           summary: Domain events are not being delivered
           description: Notifications and analytics are falling behind. Check the outbox relay and the handlers' dependencies (SMTP, Keycloak, Elasticsearch).
 
@@ -65,6 +72,7 @@ groups:
         expr: ebank_outbox_events{status="FAILED"} > 0
         labels: { severity: warning }
         annotations:
+          runbook_url: https://github.com/Samlogy/ebank-app-learn/blob/master/docs/runbooks/ebank-outbox-events-failed.md
           summary: "{{ $value }} outbox event(s) gave up after too many attempts"
           description: "Find them with SELECT * FROM outbox_event WHERE status = 'FAILED', fix the cause, then set them back to PENDING."
 
@@ -72,6 +80,7 @@ groups:
         expr: sum(increase(ebank_notifications_delivered_total{outcome="failed"}[15m])) > 5
         labels: { severity: warning }
         annotations:
+          runbook_url: https://github.com/Samlogy/ebank-app-learn/blob/master/docs/runbooks/ebank-notification-delivery-failing.md
           summary: Notifications fail to be delivered (live push, email or SMS)
 
   - name: ebank-chat
@@ -80,6 +89,7 @@ groups:
         expr: sum(increase(ebank_chatbot_assistant_replies_total{outcome=~"unavailable|failed"}[10m])) > 3
         labels: { severity: warning }
         annotations:
+          runbook_url: https://github.com/Samlogy/ebank-app-learn/blob/master/docs/runbooks/ebank-assistant-unavailable.md
           summary: The chat assistant cannot answer (LLM errors or timeouts)
           description: Customers get the fallback message. Check the Anthropic API key, quota and status.
 
@@ -89,4 +99,5 @@ groups:
         for: 15m
         labels: { severity: warning }
         annotations:
+          runbook_url: https://github.com/Samlogy/ebank-app-learn/blob/master/docs/runbooks/ebank-advisor-queue-slow.md
           summary: Customers wait more than 10 minutes on average for an advisor

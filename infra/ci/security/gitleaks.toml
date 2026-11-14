@@ -7,7 +7,7 @@ description = "Local development credentials, documented as dev-only"
 regexes = [
   '''dev-notifications-secret''',
   '''dev-redis''',
-  '''Test-1234!''',
+  '''Test-1234!Ebank''',
 ]
 paths = [
   '''infra/compose/docker-compose\.yml''',

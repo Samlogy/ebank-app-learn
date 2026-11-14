@@ -1,9 +1,7 @@
 <!doctype html>
 <html>
   <body>
-    <script>
-      // Loaded in a hidden iframe by keycloak-js to restore the session after a page reload.
-      parent.postMessage(location.href, location.origin);
-    </script>
+    <!-- Loaded in a hidden iframe by keycloak-js to restore the session after a page reload. -->
+    <script src="silent-check-sso.js"></script>
   </body>
 </html>

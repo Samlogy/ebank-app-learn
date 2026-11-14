@@ -10,6 +10,16 @@ datasources:
     jsonData:
       timeInterval: 15s
 
+  # Firing alerts and silences, in Grafana's Alerting > Alert rules / Silences views.
+  - name: Alertmanager
+    uid: alertmanager
+    type: alertmanager
+    access: proxy
+    url: http://alertmanager:9093
+    jsonData:
+      implementation: prometheus
+      handleGrafanaManagedAlerts: false
+
   - name: Jaeger
     uid: jaeger
     type: jaeger

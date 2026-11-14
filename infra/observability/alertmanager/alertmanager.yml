@@ -1,0 +1,36 @@
+# Local Alertmanager: every alert is emailed to Mailpit (http://localhost:8025), so firing alerts
+# can be seen end to end without a real mail server or chat tool.
+# Outside dev, replace the receiver with the team's channel (email, Slack, PagerDuty...) and keep
+# its credentials out of git.
+global:
+  smtp_smarthost: mailpit:1025
+  smtp_from: alertmanager@ebank.local
+  smtp_require_tls: false        # Mailpit only; a real SMTP server must use STARTTLS
+
+route:
+  receiver: ops-email
+  group_by: [alertname, severity]
+  group_wait: 30s                # wait for related alerts before the first notification
+  group_interval: 5m
+  repeat_interval: 4h
+  routes:
+    # Critical alerts are repeated more often until they are resolved or silenced.
+    - matchers: [severity="critical"]
+      receiver: ops-email
+      repeat_interval: 1h
+
+receivers:
+  - name: ops-email
+    email_configs:
+      - to: ops@ebank.local
+        send_resolved: true
+        headers:
+          Subject: '[{{ .Status | toUpper }}{{ if eq .Status "firing" }}:{{ .Alerts.Firing | len }}{{ end }}] {{ .CommonLabels.alertname }} ({{ .CommonLabels.severity }})'
+
+# When the backend is down, its error rate, latency, outbox and chat alerts are consequences:
+# only the root cause is sent.
+inhibit_rules:
+  - source_matchers: [alertname="EbankBackendDown"]
+    target_matchers: [severity="warning"]
+  - source_matchers: [alertname="EbankBackendDown"]
+    target_matchers: [alertname="EbankHighErrorRate"]

@@ -20,6 +20,8 @@ This README describes how the project works today. For the design rationale and 
 - [Testing](#testing)
 - [Observability](#observability)
 - [Docker images](#docker-images)
+- [Deploying to k3s](#deploying-to-k3s)
+- [CI/CD and security scans](#cicd-and-security-scans)
 - [Conventions](#conventions)
 - [Troubleshooting](#troubleshooting)
 
@@ -35,10 +37,14 @@ This README describes how the project works today. For the design rationale and 
 | Front end: notifications | Works, but still derived in the browser from recent transfers: not yet switched to the new API |
 | Front end: chatbot | UI only, uses a simulated transport (`DemoChatTransport`) |
 | Front end: analytics | Placeholder page: not yet connected to the new API |
-| `ebank-chatbot` | Empty module (folder structure only) |
+| `ebank-chatbot` | Implemented and tested (phases 7 and 8b): Claude assistant with read-only tools, advisor handoff, queue, live text chat, read receipts |
+| `ebank-realtime` | The one STOMP connection per user, shared by notifications and chat |
+| Chat files, audio messages, 1:1 calls (phases 8c and 8d) | Not implemented: no MinIO, ClamAV, coturn or WebRTC signaling yet |
 | Message broker (Kafka or RabbitMQ), SMS provider | Not implemented. SMS is a logging stub. |
-| Redis | Configured as the Spring cache, but no code uses the cache yet |
-| `infra/k3s`, `infra/ci`, `infra/observability` | Empty placeholders |
+| Redis | Rate limits for the chat. Configured as the Spring cache, which no code uses yet. |
+| `infra/observability` | Prometheus with alert rules, Alertmanager (alerts emailed to Mailpit locally), runbooks in [docs/runbooks](docs/runbooks), Grafana dashboard, OpenTelemetry collector and Jaeger, ELK for logs (compose profile `observability`) |
+| `infra/helm` | Helm chart for k3s, with dev, qua and prod values |
+| `infra/ci` | Jenkins pipeline, SonarQube, security scans (gitleaks, Semgrep, Trivy, OWASP ZAP), SBOMs |
 
 ## Tech stack
 
@@ -101,6 +107,11 @@ flowchart TD
     Analytics -->|events in transactions.api only| Transactions
     Analytics --> Auth
     Analytics --> Common
+    Chatbot -->|accounts.api, transactions.api| Transactions
+    Chatbot --> Realtime[ebank-realtime]
+    Notifications --> Realtime
+    Notifications -->|events in chatbot.api only| Chatbot
+    Realtime --> Auth
     Accounts --> Auth
     Accounts --> Common
     Auth --> Common
@@ -117,6 +128,8 @@ Modules only talk through public APIs, never through each other's classes or tab
 - `notifications` may only use the event records in `com.ebank.transactions.api`, and nothing from `accounts`.
 - `accounts` and `transactions` must not depend on `notifications`: they publish events and don't know who listens.
 - `analytics` may only use the event records in `com.ebank.transactions.api`, nothing from `accounts` or `notifications`, and no module depends on `analytics`.
+- `chatbot` may only use the public `api` packages of `accounts`, `transactions`, `auth` and `realtime`. Its tools reach banking data through `AccountsApi.accountsOwnedBy` and `TransactionsApi` only.
+- `notifications` may only use the event records in `com.ebank.chatbot.api`, and nobody uses `com.ebank.realtime.stomp`.
 
 The public APIs are:
 
@@ -128,6 +141,9 @@ The public APIs are:
 | `TokenAuthenticator` | Validates an access token outside HTTP (STOMP `CONNECT`), with the same checks and role mapping |
 | `Outbox` / `OutboxEventHandler` | Publish a domain event in the current transaction / consume one type of event |
 | `TransactionCompleted`, `TransactionCancelled` | Events published by `transactions` through the outbox |
+| `AccountsApi.accountsOwnedBy`, `TransactionsApi` | Read-only, owner-scoped queries for callers outside a request (the chat assistant). The user ID always comes from a verified token. |
+| `RealtimeMessaging`, `UserQueue` | Push to a user's `/user/queue/...`; a module declares a `UserQueue` bean to allow subscriptions to it |
+| `AdvisorMessageSent`, `HandoffRequested` | Events published by `chatbot`: notify a customer who is away, alert advisors when nobody is online |
 
 Domain modules use the same package layout: `api` (public), `application`, `domain`, `infrastructure` and `web`.
 
@@ -143,13 +159,17 @@ Domain modules use the same package layout: `api` (public), `application`, `doma
 │   ├── ebank-transactions/   Transfers, deposits, ledger, balances, search
 │   ├── ebank-notifications/  Notifications, preferences, WebSocket push, email/SMS fallback
 │   ├── ebank-analytics/      Transaction facts in Elasticsearch, summaries and timelines
-│   └── ebank-chatbot/        Empty, planned
+│   ├── ebank-realtime/       WebSocket/STOMP: JWT on CONNECT, per-module user queues, presence
+│   └── ebank-chatbot/        Assistant (Claude + tools), conversations, advisor handoff and chat
 ├── front-web/                Angular application
 ├── infra/
 │   ├── compose/              docker-compose.yml for local development
 │   ├── docker/               Dockerfiles and nginx config
 │   ├── keycloak/realms/      Versioned "ebank" realm, imported at startup in dev
-│   └── k3s/, ci/, observability/   Empty placeholders
+│   ├── helm/ebank/           Helm chart for k3s: templates/, values.yaml, values-{dev,qua,prod}.yaml
+│   ├── ci/                   jenkins/ (Jenkinsfile, agent), sonarqube/, security/ (scan.sh and rules)
+│   ├── observability/        prometheus/, grafana/, otel/, elk/
+│   └── scripts/              End-to-end test scripts and a STOMP client
 └── project.md                Design decisions and roadmap
 ```
 
@@ -270,6 +290,7 @@ Shared settings are in [application.yml](backend/ebank-app/src/main/resources/ap
 | `KEYCLOAK_URL` | Yes | `http://localhost:8180` | Keycloak base URL for the Admin API (email and phone lookup) |
 | `KEYCLOAK_NOTIFICATIONS_CLIENT_SECRET` | Yes | `dev-notifications-secret` | Secret of the `ebank-notifications` service account. Empty turns email/SMS fallback off. |
 | `ELASTICSEARCH_URIS` | Yes | `http://localhost:9200` | Analytics store |
+| `ANTHROPIC_API_KEY` | Yes | Empty: scripted assistant | Claude API key for the chat assistant. Without it in `dev`, a keyword-based assistant answers with the same tools. |
 | `ELASTICSEARCH_USERNAME` / `ELASTICSEARCH_PASSWORD` | Yes | Not used | Elasticsearch credentials |
 
 Two issuer settings are needed because browsers and containers reach Keycloak at different addresses. Tokens always name `http://localhost:8180` as their issuer, while the backend container fetches keys from `http://keycloak:8080`.
@@ -307,10 +328,11 @@ The realm is versioned in [ebank-realm.json](infra/keycloak/realms/ebank-realm.j
 
 | Setting | Value |
 |---|---|
-| Clients | `ebank-web` (public, PKCE), `ebank-api` (bearer-only, used as the audience), `ebank-notifications` (confidential service account with only `view-users`, to read email and phone) |
-| Roles | `CUSTOMER` (default for new users), `ADMIN` |
-| MFA | TOTP required for `ADMIN`, optional for `CUSTOMER` |
+| Clients | `ebank-web` (public, PKCE), `ebank-api` (bearer-only, used as the audience), `ebank-notifications` (confidential service account with `view-users` and `view-realm`, to read email and phone and list advisors; needs the `kc-admin-api` scope on Keycloak 26.8+) |
+| Roles | `CUSTOMER` (default for new users), `ADVISOR` (answers customers in the chat, no direct access to banking data), `ADMIN` |
+| MFA | TOTP required for `ADMIN` and `ADVISOR`, optional for `CUSTOMER` |
 | Registration | Open, with email verification. Password reset enabled. |
+| Password policy | At least 12 characters (128 at most), not the username or email, not one of the last 3 passwords, PBKDF2 with 210,000 iterations |
 | Protection | Brute-force detection on, login and admin events recorded |
 
 The password grant is disabled on `ebank-web`, so you can't get a token with a direct `curl` login. To call the API by hand, sign in through the app and copy the bearer token from a request in the browser's developer tools.
@@ -476,6 +498,35 @@ All take `from` and `to` as inclusive UTC days (`yyyy-MM-dd`), the last 30 days 
 
 **Rebuilding.** The index is a projection. To rebuild it, delete it and replay the events still in the outbox (published events are kept 7 days). A full rebuild from the ledger would need an export API in `transactions`, which doesn't exist yet.
 
+### Chat
+
+Customers, under `/chat/conversations`:
+
+| Method | Path | Description |
+|---|---|---|
+| `POST` | `/chat/conversations` | The open conversation, or a new one (one open conversation per customer) |
+| `GET` | `/chat/conversations`, `/{id}` | List (paged) or one |
+| `GET` | `/{id}/messages?afterSeq=` | Messages after a sequence number, oldest first: use it to catch up after a reconnect |
+| `POST` | `/{id}/messages` | `{"clientMessageId", "text"}`, at most 2000 characters. 201, or 200 when the same `clientMessageId` was already sent. In `BOT` state the assistant replies in the background. |
+| `DELETE` | `/{id}/messages/{messageId}` | Soft-delete your own message |
+| `POST` | `/{id}/handoff`, `/{id}/back-to-bot`, `/{id}/resolve` | Talk to an advisor, go back to the assistant, close |
+| `POST` | `/{id}/read` | `{"seq"}`: read receipt, pushed to the other side |
+
+Advisors (`ADVISOR` role), under `/advisor`: `GET /queue` (waiting conversations with the assistant's summary), `GET /conversations` (assigned to me), `GET /conversations/{id}` and `/messages` (whole transcript, assistant part included), `POST /conversations/{id}/claim` (409 `ALREADY_ASSIGNED` if another advisor was faster), `/messages`, `/resolve` and `/read`. An advisor only sees waiting conversations and their own.
+
+States: `BOT → WAITING_ADVISOR → WITH_ADVISOR → RESOLVED`. The customer can go back to `BOT` from the queue or after resolution. Live events (`MESSAGE`, `STATE`, `READ`, `DELETED`, `TYPING`, `QUEUE`) are pushed on `/user/queue/chat`. An advisor counts as online while subscribed to it, and only then do conversations get assigned to them automatically (the least busy advisor first). With nobody online, the customer is told so, the conversation stays queued and advisors get an email, at most one every 5 minutes.
+
+**Assistant.** `claude-opus-5-5` with effort `low`, through the official Anthropic Java SDK and a manual tool loop (at most 6 tool turns). Server-side refusal fallbacks are on (`fallbacks: "default"`). The tools are `list_accounts`, `get_balance`, `list_recent_transactions` and `escalate_to_advisor`. The first three are read-only; the last only changes the conversation state.
+
+- The customer's user ID is fixed from their token when the tool session starts. Nothing the model sends can change it.
+- The model sees accounts as `account_1`, `account_2`... plus their last 4 characters, never full account numbers.
+- Email addresses, account, card and phone numbers that customers type are masked before their text is sent.
+- The system prompt treats customer messages and tool results as data.
+- Every tool call, handoff, assignment and resolution is written to `chatbot_audit`, without content or arguments.
+- Rate limits use Redis: 20 messages a minute, 10 new conversations and 5 handoffs an hour.
+
+Without `ANTHROPIC_API_KEY`, a scripted assistant (English and French keywords) uses the same tools.
+
 ## Database
 
 Flyway owns the schema, and Hibernate only validates it (`ddl-auto: validate`).
@@ -490,6 +541,11 @@ Flyway owns the schema, and Hibernate only validates it (`ddl-auto: validate`).
 | `outbox_event_handled` | `common` | Which handlers already processed an event, so a retry only re-runs the ones that failed |
 | `notification` | `notifications` | One row per user and event, unique per `(source_event_id, user_id)` so a redelivered event never notifies twice |
 | `notification_preference` | `notifications` | Offline channels per user. No row means the defaults. |
+| `conversation` | `chatbot` | State, handoff reason, advisor, summary. At most one open conversation per customer (partial unique index). |
+| `message` | `chatbot` | Per-conversation `seq` (gap-free: appended under a row lock), unique `(conversation_id, sender_id, client_message_id)` for idempotent sends, soft delete |
+| `conversation_participant` | `chatbot` | Who is in a conversation and how far they have read |
+| `chatbot_audit` | `chatbot` | Tool calls, handoffs, assignments, resolutions. No message content. |
+| `outbox_event_handled` | `common` | Which outbox handlers already processed an event |
 
 The outbox delivers **at least once**: handlers must be idempotent. Each handler runs in its own transaction, together with its row in `outbox_event_handled`, so handlers are independent. If analytics fails, notifications are still committed, and the retry only re-runs analytics. An event becomes `PUBLISHED` once all its handlers have succeeded. Failures are retried with exponential backoff (2 s, 4 s, ... up to 15 min). Events are claimed with `FOR UPDATE SKIP LOCKED` plus a 5-minute lease, so several instances can run the relay and no lock is held while handlers run. Only the exception type is stored in `last_error`, never its message.
 
@@ -551,7 +607,7 @@ Run these from `backend/`:
 |---|---|---|
 | Unit | `src/test` in each module | Domain rules and services |
 | Architecture | `ModuleBoundariesTest` in `ebank-app` | Module boundaries, see [Module boundaries](#module-boundaries) |
-| Integration | `AccountsIT`, `TransfersIT`, `NotificationsIT`, `AnalyticsIT`, `OutboxIT` in `ebank-app` | Full HTTP and STOMP requests against a real PostgreSQL through Testcontainers. `AnalyticsIT` also starts Elasticsearch. Other ITs run with `ebank.analytics.enabled=false`. |
+| Integration | `AccountsIT`, `TransfersIT`, `NotificationsIT`, `AnalyticsIT`, `OutboxIT`, `ChatIT` in `ebank-app` | Full HTTP and STOMP requests against a real PostgreSQL through Testcontainers. `AnalyticsIT` also starts Elasticsearch. Other ITs run with `ebank.analytics.enabled=false`. |
 
 The integration tests include concurrency scenarios: simultaneous debits never overdraw an account, opposite transfers don't deadlock, and simultaneous retries with one key move money once. They replace Keycloak with a test JWT decoder, so the real Keycloak flow is not covered yet.
 
@@ -564,6 +620,7 @@ cd infra/compose && docker compose up -d --wait      # infrastructure
 cd backend/ebank-app && ../mvnw spring-boot:run      # backend, dev profile
 infra/scripts/test-notifications.sh                  # needs curl, jq, node 22+
 infra/scripts/test-analytics.sh                      # 41 checks; stops Elasticsearch once (SKIP_OUTAGE=1 to skip)
+infra/scripts/test-chat.sh                           # 38 checks: assistant, handoff, advisor, live assignment
 ```
 
 [test-analytics.sh](infra/scripts/test-analytics.sh) books a deposit, a transfer, an internal move, a refused transfer and an incoming transfer. It then checks every analytics endpoint from both users' points of view and inspects the documents in Elasticsearch. Finally it stops Elasticsearch: analytics return 503 while transfers and notifications keep working, and the index catches up once Elasticsearch is back. Both scripts share [lib.sh](infra/scripts/lib.sh).
@@ -592,11 +649,25 @@ npm run build               # Production build, enforces bundle size budgets
 | Signal | How |
 |---|---|
 | Health | `/actuator/health/liveness` and `/actuator/health/readiness` |
-| Metrics | `/actuator/prometheus`, with HTTP latency histograms, `ebank_security_rejections_total{status="401"\|"403"}`, `ebank_notifications_recorded_total{type}`, `ebank_notifications_delivered_total{channel,outcome}`, `ebank_websocket_sessions` and `ebank_analytics_indexed_total{status}` |
-| Logs | Plain text in `dev`, ECS JSON on stdout in `qua` and `prod`, ready to ship to ELK |
-| Traces | OpenTelemetry over OTLP. Metrics and logs are deliberately not sent over OTLP. |
+| Metrics | `/actuator/prometheus`, with HTTP latency histograms and the `ebank_*` metrics below |
+| Logs | Plain text in `dev`, ECS JSON on stdout in `qua`, `prod` and the compose backend, with `traceId` for jumping to the trace |
+| Traces | OpenTelemetry over OTLP to the collector, then Jaeger. Metrics and logs are deliberately not sent over OTLP. |
 
-`/actuator/prometheus` needs no token because scrapers don't have one, so keep port 8081 private in `qua` and `prod`. Prometheus, Grafana, ELK and a trace collector aren't set up in this repository yet.
+`ebank_*` metrics: `security_rejections_total{status}`, `outbox_events{status}`, `outbox_oldest_pending_seconds`, `notifications_recorded_total{type}`, `notifications_delivered_total{channel,outcome}`, `websocket_sessions`, `analytics_indexed_total{status}`, `chatbot_messages_total{sender}`, `chatbot_assistant_replies_total{outcome}`, `chatbot_tool_calls_total{tool,outcome}`, `chatbot_handoffs_total{reason}`, `chatbot_queue_wait_seconds`, `chatbot_llm_latency_seconds`.
+
+Locally, `docker compose --profile observability up -d --wait` starts the stack from [infra/observability](infra/observability):
+
+| Service | URL | What |
+|---|---|---|
+| Prometheus | http://localhost:9090 | Scrapes the backend in compose or on the host, and evaluates [ebank-alerts.yml](infra/observability/prometheus/rules/ebank-alerts.yml): backend down, 5xx rate, latency, heap, 401/403 spikes, outbox backlog or failures, notification failures, assistant unavailable, slow advisor queue |
+| Alertmanager | http://localhost:9093 | Receives Prometheus alerts, groups them, holds back the consequences of `EbankBackendDown`, and emails them to `ops@ebank.local` in Mailpit (http://localhost:8025) |
+| Grafana | http://localhost:3000 (`admin` / `admin`) | Provisioned data sources (Prometheus, Alertmanager, Jaeger, logs) and the "EBANK overview" dashboard |
+| Jaeger | http://localhost:16686 | Traces. Set `OTLP_TRACES_ENABLED=true` for the backend. |
+| Kibana | http://localhost:5601 | Data views `ebank-logs-*` (logs, via Filebeat and Logstash) and `ebank-transactions` (analytics) |
+
+Every alert has a `runbook_url` annotation pointing to its page in [docs/runbooks](docs/runbooks): what it means, how to check, how to fix and when to escalate. Add a page whenever you add an alert.
+
+Filebeat reads the logs of containers labelled `ebank-logs=true` (the compose backend). It needs root and the Docker socket, so it is for local use only. `/actuator/prometheus` needs no token because scrapers don't have one, so keep port 8081 private in `qua` and `prod`.
 
 ## Docker images
 
@@ -604,8 +675,95 @@ Both images use multi-stage builds, run as non-root users and are built by Compo
 
 | Image | Dockerfile | Notes |
 |---|---|---|
-| `ebank-backend` | [infra/docker/backend/Dockerfile](infra/docker/backend/Dockerfile) | One image layer per Spring Boot layer. Tests are skipped during the build. Exposes 8080 and 8081. Needs `SPRING_PROFILES_ACTIVE`. |
-| `ebank-front-web` | [infra/docker/front-web/Dockerfile](infra/docker/front-web/Dockerfile) | nginx on port 8080, with the fallback route for the Angular app, long-lived caching for static assets, and a `/healthz` endpoint. |
+| `ebank-backend` | [infra/docker/backend/Dockerfile](infra/docker/backend/Dockerfile) | One image layer per Spring Boot layer. The jar is extracted as `app.jar`, so a version bump doesn't change the entry point. Tests are skipped during the build. Exposes 8080 and 8081. Needs `SPRING_PROFILES_ACTIVE`. |
+| `ebank-front-web` | [infra/docker/front-web/Dockerfile](infra/docker/front-web/Dockerfile) | nginx on port 8080, with the fallback route for the Angular app, long-lived caching for static assets, security headers and a `/healthz` endpoint. The config is rendered at startup from [templates](infra/docker/front-web/templates) into `/tmp/nginx`, so it works with a read-only root filesystem. |
+
+## Deploying to k3s
+
+[infra/helm/ebank](infra/helm/ebank) is a Helm 3 chart: PostgreSQL, Redis, Keycloak, backend, front end and a Traefik ingress, plus Elasticsearch and Mailpit when `devServices.enabled` is true (dev only). [values.yaml](infra/helm/ebank/values.yaml) holds the production-like defaults, and each environment overrides what differs in `values-dev.yaml`, `values-qua.yaml` or `values-prod.yaml`.
+
+```bash
+# dev: plain HTTP on *.ebank.localhost, dev-only secrets created by the chart, realm imported
+helm upgrade --install ebank infra/helm/ebank -n ebank-dev --create-namespace \
+  -f infra/helm/ebank/values-dev.yaml \
+  --set-file keycloak.realm=infra/keycloak/realms/ebank-realm.json
+
+# qua / prod: create the secrets first, never from git
+kubectl create namespace ebank-prod
+kubectl -n ebank-prod create secret generic ebank-backend-secrets --from-env-file=backend.env
+kubectl -n ebank-prod create secret generic ebank-postgres --from-env-file=postgres.env   # POSTGRES_USER, POSTGRES_PASSWORD, KEYCLOAK_DB_PASSWORD
+kubectl -n ebank-prod create secret generic ebank-keycloak --from-env-file=keycloak.env   # ADMIN_USERNAME, ADMIN_PASSWORD
+helm upgrade --install ebank infra/helm/ebank -n ebank-prod \
+  -f infra/helm/ebank/values-prod.yaml --set image.tag=<git sha> --wait
+
+# Useful
+helm template ebank infra/helm/ebank -f infra/helm/ebank/values-qua.yaml   # see what would be applied
+helm -n ebank-prod history ebank                                           # releases
+helm -n ebank-prod rollback ebank <revision>                               # go back
+```
+
+| Value | Default | Purpose |
+|---|---|---|
+| `image.registry`, `image.tag` | `docker.io/ebank`, chart `appVersion` | Backend and front-end images. CI sets the tag to the commit. |
+| `hosts.app`, `hosts.api`, `hosts.auth` | `*.ebank.example` | Ingress hosts. The issuer URI, CORS origin and Keycloak hostname are derived from them. |
+| `ingress.tls.enabled`, `ingress.tls.clusterIssuer` | `true`, empty | HTTPS on the `websecure` entrypoint; a cert-manager issuer adds the annotation. |
+| `secrets.create` | `false` | `true` (dev only) creates the three Secrets from `secrets.postgres`, `secrets.keycloak`, `secrets.backend`. |
+| `backend.config` | see `values.yaml` | Extra keys of the `ebank-backend-config` ConfigMap. |
+| `backend.actuatorPort` | `management` | Probe and scrape port: `http` in dev, where actuator has no separate port. |
+| `keycloak.devMode`, `keycloak.realm` | `false`, empty | `start-dev` instead of `start`; a realm passed with `--set-file` is imported on first start. |
+| `devServices.enabled` | `false` | In-cluster Elasticsearch and Mailpit. |
+| `networkPolicy.*` | enabled | Which namespaces may reach ports 8080 and 8081. |
+
+Resource names are fixed (`backend`, `postgres`, `keycloak`...) because the backend config uses them as host names, so install one release per namespace. Pods restart on their own when `backend.config` (or, in dev, a secret value) changes, through `checksum/*` annotations.
+
+`ebank-backend-secrets` holds `DB_USERNAME`, `DB_PASSWORD`, `REDIS_PASSWORD`, `MAIL_USERNAME`, `MAIL_PASSWORD`, `KEYCLOAK_NOTIFICATIONS_CLIENT_SECRET`, `ELASTICSEARCH_USERNAME`, `ELASTICSEARCH_PASSWORD` and `ANTHROPIC_API_KEY`.
+
+- **Backend: one replica on purpose.** The STOMP broker, presence and the assistant's per-conversation locks are in memory. Scaling out needs a broker relay first.
+- **Backend: management port.** Probes and Prometheus use port 8081, which the ingress never routes. `NetworkPolicy` lets only Traefik reach 8080 and only the `monitoring` namespace reach 8081.
+- **Pod hardening.** Every pod runs non-root, without privilege escalation, with all capabilities dropped and the `RuntimeDefault` seccomp profile. Root filesystems are read-only except Keycloak's and the dev Elasticsearch's. Service links are off: the `redis` Service would otherwise inject `REDIS_PORT=tcp://...`, which Spring reads as its port.
+- **TLS.** prod gets certificates from cert-manager (`letsencrypt-prod` ClusterIssuer, installed separately).
+- **Front end, known limitation.** The image is built with `environment.ts` (localhost URLs), so it needs a per-environment build or runtime configuration before it works behind the ingress.
+
+## CI/CD and security scans
+
+[infra/ci/jenkins/Jenkinsfile](infra/ci/jenkins/Jenkinsfile) runs in an agent built from [agent.Dockerfile](infra/ci/jenkins/agent.Dockerfile) (JDK 21, Node 24, Docker CLI, kubectl, Helm). It needs a SonarQube server named `sonarqube`, a `dockerhub` credential and a `kubeconfig-dev` file credential.
+
+1. Secrets scan.
+2. Backend and front end in parallel: `./mvnw -Pci verify` (all tests, JaCoCo coverage, CycloneDX SBOM) and `npm ci`, tests with coverage, build, npm SBOM.
+3. SonarQube analysis and quality gate.
+4. SAST, dependency and IaC scans in parallel.
+5. Image build and scan.
+6. On `master` only: push to DockerHub, `helm upgrade --install` with `values-dev.yaml` and the commit as image tag (waits for the pods), then an OWASP ZAP baseline scan.
+
+[infra/ci/security/scan.sh](infra/ci/security/scan.sh) runs the same scanners locally, each in a pinned container, and writes SARIF and HTML reports to `reports/`. It fails on HIGH and CRITICAL findings and on any leaked secret.
+
+| Command | Tool | Checks |
+|---|---|---|
+| `scan.sh secrets` | gitleaks | Git history. Dev-only values are allow-listed in `gitleaks.toml`. |
+| `scan.sh sast` | Semgrep | Community Java, TypeScript and secrets rules, plus [semgrep.yml](infra/ci/security/semgrep.yml): no `double` money, no logging of emails or content, no user ID from the request, no Angular sanitizer bypass, no wildcard CORS |
+| `scan.sh deps` | Trivy | The backend SBOM (`target/classes/META-INF/sbom/application.cdx.json`, also served at `/actuator/sbom`) and `package-lock.json` |
+| `scan.sh iac` | Helm, Trivy | `helm lint --strict`, then Dockerfiles, compose, and the chart rendered for each environment, one resource per file. Accepted findings, each with a reason, are in [.trivyignore.yaml](infra/ci/security/.trivyignore.yaml). |
+| `scan.sh image <image>` | Trivy | OS packages and JARs of a built image |
+| `scan.sh dast <url>` | OWASP ZAP | Passive baseline scan with [rules.tsv](infra/ci/security/zap/rules.tsv) |
+
+The SBOM goal needs online mode: an offline build (`mvn -o`) silently skips it. To try SonarQube locally, start it with `docker compose -f infra/ci/sonarqube/compose.yml up -d`; the host needs `vm.max_map_count` of at least 262144.
+
+### Front-end security headers
+
+nginx sends these on every page and asset:
+
+| Header | Value and reason |
+|---|---|
+| `Content-Security-Policy` | `script-src 'self'`: no inline script runs. `connect-src` and `frame-src` only allow the API and Keycloak origins, from `EBANK_API_ORIGIN`, `EBANK_WS_ORIGIN` and `EBANK_AUTH_ORIGIN` (set by compose and the Helm chart). `frame-ancestors 'self'` stops clickjacking. `style-src` keeps `'unsafe-inline'` because Angular inserts component styles at runtime. |
+| `X-Frame-Options`, `X-Content-Type-Options`, `Referrer-Policy` | `SAMEORIGIN`, `nosniff`, `no-referrer` |
+| `Permissions-Policy` | Camera, geolocation, payment and USB off. Microphone allowed for the app itself, for voice messages. |
+| `Strict-Transport-Security` | One year. Browsers ignore it over plain HTTP, so local development is unaffected. |
+
+To keep the policy strict, `index.html` and `silent-check-sso.html` load their scripts from files (`theme-init.js`, `silent-check-sso.js`), and the production build doesn't inline critical CSS, which would add an `onload` handler. A new inline script or event handler will be blocked: put it in a file.
+
+### Dependency updates
+
+Every version is pinned (Maven, npm, images in the Dockerfiles, compose, the Helm values and `scan.sh`). [renovate.json](renovate.json) makes Renovate propose the updates as pull requests every Monday morning, grouped per ecosystem. Major versions wait for approval in the dependency dashboard, and security fixes are proposed straight away. Renovate needs the Renovate GitHub app on the repository, or a self-hosted run.
 
 ## Conventions
 
@@ -630,3 +788,7 @@ Both images use multi-stage builds, run as non-root users and are built by Compo
 | Changes to `ebank-realm.json` have no effect | The realm already exists, so the import is skipped. See [Stop the stack](#stop-the-stack). |
 | Verification email didn't arrive | All local email goes to Mailpit at http://localhost:8025. |
 | Backend exits at startup outside `dev` | A required environment variable is missing. See [Environment variables](#environment-variables). |
+| Maven fails with "cannot find symbol" on classes that exist, an empty record, or a missing `*Mapper` bean, while VS Code is open | The editor's Java builder writes stub classes into the same `target/` folder as Maven. Let the editor finish building, then run `./mvnw clean install` again. |
+| Assistant only answers with the help text | No `ANTHROPIC_API_KEY`: the scripted assistant only knows a few keywords (balance, accounts, transactions, advisor). |
+| No advisor alert email | The `ebank-notifications` service account needs `view-realm` to list advisors (`infra/scripts/lib.sh` adds it to an existing Keycloak). Alerts are sent at most once every 5 minutes. |
+| Backend pod in k3s fails on `spring.data.redis.port` | Service links are on: the `redis` Service injects `REDIS_PORT=tcp://...`. Keep `enableServiceLinks: false`. |
