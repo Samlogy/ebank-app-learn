@@ -29,11 +29,16 @@ class EmailChannel implements OfflineChannel {
 
     @Override
     public void send(Notification notification, String address) {
+        sendText(address, NotificationText.subject(notification), NotificationText.body(notification));
+    }
+
+    @Override
+    public void sendText(String address, String subject, String body) {
         SimpleMailMessage message = new SimpleMailMessage();
         message.setFrom(from);
         message.setTo(address);
-        message.setSubject(NotificationText.subject(notification));
-        message.setText(NotificationText.body(notification));
+        message.setSubject(subject);
+        message.setText(body);
         mail.send(message);
     }
 }

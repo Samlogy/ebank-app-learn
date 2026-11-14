@@ -65,6 +65,21 @@ ebank:
     max-backoff: 15m
     retention: 7d
     lease: 5m
+  chatbot:
+    assistant:
+      # Without a key the scripted assistant answers (dev and tests). The key never goes in the repository.
+      api-key: ${ANTHROPIC_API_KEY:}
+      model: claude-opus-5-5
+      effort: low           # short chat answers; raise only if measured quality needs it
+      timeout: 60s
+      max-tool-turns: 6
+      history-size: 30
+    limits:
+      messages-per-minute: 20
+      conversations-per-hour: 10
+      handoffs-per-hour: 5
+    rate-limit:
+      store: redis
   analytics:
     enabled: true
     index: ebank-transactions    # alias over ebank-transactions-v1

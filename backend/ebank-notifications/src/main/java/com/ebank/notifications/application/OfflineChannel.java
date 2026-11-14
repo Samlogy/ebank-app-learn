@@ -11,4 +11,7 @@ public interface OfflineChannel {
 
     /** Throws if sending failed, so the outbox retries. */
     void send(Notification notification, String address);
+
+    /** A message that is not about one stored notification, such as an alert to advisors. */
+    void sendText(String address, String subject, String body);
 }

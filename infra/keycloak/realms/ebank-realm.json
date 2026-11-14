@@ -36,6 +36,10 @@
         "description": "Bank administrator"
       },
       {
+        "name": "ADVISOR",
+        "description": "Bank advisor: answers customers in the chat, no direct access to banking data"
+      },
+      {
         "name": "default-roles-ebank",
         "description": "Roles given to every new user",
         "composite": true,
@@ -140,6 +144,20 @@
         "condUserRole": "ADMIN",
         "negate": "true"
       }
+    },
+    {
+      "alias": "user-is-advisor",
+      "config": {
+        "condUserRole": "ADVISOR",
+        "negate": "false"
+      }
+    },
+    {
+      "alias": "user-is-not-advisor",
+      "config": {
+        "condUserRole": "ADVISOR",
+        "negate": "true"
+      }
     }
   ],
   "authenticationFlows": [
@@ -188,6 +206,13 @@
           "userSetupAllowed": false
         },
         {
+          "flowAlias": "ebank-advisor-otp",
+          "requirement": "CONDITIONAL",
+          "priority": 25,
+          "autheticatorFlow": true,
+          "userSetupAllowed": false
+        },
+        {
           "flowAlias": "ebank-customer-otp",
           "requirement": "CONDITIONAL",
           "priority": 30,
@@ -222,7 +247,7 @@
     },
     {
       "alias": "ebank-customer-otp",
-      "description": "Other users only need TOTP if they set it up",
+      "description": "Customers only need TOTP if they set it up",
       "providerId": "basic-flow",
       "topLevel": false,
       "builtIn": false,
@@ -236,6 +261,14 @@
           "authenticatorConfig": "user-is-not-admin"
         },
         {
+          "authenticator": "conditional-user-role",
+          "requirement": "REQUIRED",
+          "priority": 15,
+          "autheticatorFlow": false,
+          "userSetupAllowed": false,
+          "authenticatorConfig": "user-is-not-advisor"
+        },
+        {
           "authenticator": "conditional-user-configured",
           "requirement": "REQUIRED",
           "priority": 20,
@@ -246,6 +279,38 @@
           "authenticator": "auth-otp-form",
           "requirement": "REQUIRED",
           "priority": 30,
+          "autheticatorFlow": false,
+          "userSetupAllowed": false
+        }
+      ]
+    },
+    {
+      "alias": "ebank-advisor-otp",
+      "description": "ADVISOR must use TOTP, and must set it up on first login",
+      "providerId": "basic-flow",
+      "topLevel": false,
+      "builtIn": false,
+      "authenticationExecutions": [
+        {
+          "authenticator": "conditional-user-role",
+          "requirement": "REQUIRED",
+          "priority": 10,
+          "autheticatorFlow": false,
+          "userSetupAllowed": false,
+          "authenticatorConfig": "user-is-advisor"
+        },
+        {
+          "authenticator": "conditional-user-role",
+          "requirement": "REQUIRED",
+          "priority": 15,
+          "autheticatorFlow": false,
+          "userSetupAllowed": false,
+          "authenticatorConfig": "user-is-not-admin"
+        },
+        {
+          "authenticator": "auth-otp-form",
+          "requirement": "REQUIRED",
+          "priority": 20,
           "autheticatorFlow": false,
           "userSetupAllowed": false
         }

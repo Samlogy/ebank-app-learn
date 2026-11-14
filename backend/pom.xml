@@ -22,6 +22,7 @@
         <module>ebank-auth</module>
         <module>ebank-accounts</module>
         <module>ebank-transactions</module>
+        <module>ebank-realtime</module>
         <module>ebank-notifications</module>
         <module>ebank-analytics</module>
         <module>ebank-chatbot</module>
@@ -33,6 +34,7 @@
         <springdoc.version>3.2.0</springdoc.version>
         <mapstruct.version>1.6.3</mapstruct.version>
         <archunit.version>1.5.1</archunit.version>
+        <anthropic-java.version>3.3.0</anthropic-java.version>
     </properties>
 
     <dependencyManagement>
@@ -41,6 +43,11 @@
                 <groupId>org.mapstruct</groupId>
                 <artifactId>mapstruct</artifactId>
                 <version>${mapstruct.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>com.anthropic</groupId>
+                <artifactId>anthropic-java</artifactId>
+                <version>${anthropic-java.version}</version>
             </dependency>
             <dependency>
                 <groupId>com.tngtech.archunit</groupId>
@@ -70,6 +77,11 @@
             <dependency>
                 <groupId>com.ebank</groupId>
                 <artifactId>ebank-transactions</artifactId>
+                <version>${project.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>com.ebank</groupId>
+                <artifactId>ebank-realtime</artifactId>
                 <version>${project.version}</version>
             </dependency>
             <dependency>

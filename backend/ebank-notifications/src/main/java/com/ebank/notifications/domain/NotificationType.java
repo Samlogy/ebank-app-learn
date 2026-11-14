@@ -8,5 +8,7 @@ public enum NotificationType {
     /** The user moved money between two of their own accounts. */
     TRANSFER_INTERNAL,
     /** A transfer the user started was refused, for example for insufficient funds. */
-    TRANSFER_CANCELLED
+    TRANSFER_CANCELLED,
+    /** An advisor wrote in the user's support conversation while they were away. */
+    ADVISOR_MESSAGE
 }

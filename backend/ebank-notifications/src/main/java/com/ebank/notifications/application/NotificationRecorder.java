@@ -1,5 +1,6 @@
 package com.ebank.notifications.application;
 
+import com.ebank.chatbot.api.AdvisorMessageSent;
 import com.ebank.common.outbox.Outbox;
 import com.ebank.notifications.domain.Notification;
 import com.ebank.notifications.infrastructure.persistence.NotificationRepository;
@@ -47,6 +48,11 @@ public class NotificationRecorder {
     @Transactional(propagation = Propagation.MANDATORY)
     public void onTransactionCompleted(UUID eventId, TransactionCompleted event) {
         record(NotificationFactory.forCompleted(eventId, event));
+    }
+
+    @Transactional(propagation = Propagation.MANDATORY)
+    public void onAdvisorMessage(UUID eventId, AdvisorMessageSent event) {
+        record(List.of(NotificationFactory.forAdvisorMessage(eventId, event)));
     }
 
     @Transactional(propagation = Propagation.MANDATORY)

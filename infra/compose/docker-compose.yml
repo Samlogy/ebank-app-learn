@@ -121,6 +121,7 @@ services:
       KEYCLOAK_URL: http://keycloak:8080    # Admin API, to read email and phone for offline notifications
       MAIL_HOST: mailpit
       ELASTICSEARCH_URIS: http://elasticsearch:9200
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}    # empty: scripted assistant
     ports:
       - "127.0.0.1:8080:8080"
     depends_on:

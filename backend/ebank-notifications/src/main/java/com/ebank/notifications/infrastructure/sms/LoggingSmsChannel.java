@@ -23,6 +23,11 @@ class LoggingSmsChannel implements OfflineChannel {
     }
 
     @Override
+    public void sendText(String address, String subject, String body) {
+        log.info("SMS not sent: no SMS provider configured ({} characters)", body.length());
+    }
+
+    @Override
     public void send(Notification notification, String address) {
         log.info("SMS for notification {} not sent: no SMS provider configured ({} characters)",
                 notification.getId(), NotificationText.sms(notification).length());

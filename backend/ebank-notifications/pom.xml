@@ -21,6 +21,11 @@
             <groupId>com.ebank</groupId>
             <artifactId>ebank-auth</artifactId>
         </dependency>
+        <!-- Only for the event records in com.ebank.chatbot.api. -->
+        <dependency>
+            <groupId>com.ebank</groupId>
+            <artifactId>ebank-chatbot</artifactId>
+        </dependency>
         <!-- Only for the event records in com.ebank.transactions.api. -->
         <dependency>
             <groupId>com.ebank</groupId>

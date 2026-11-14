@@ -1,5 +1,6 @@
 package com.ebank.notifications.application;
 
+import com.ebank.chatbot.api.AdvisorMessageSent;
 import com.ebank.notifications.domain.Notification;
 import com.ebank.notifications.domain.NotificationType;
 import com.ebank.transactions.api.TransactionCancelled;
@@ -49,6 +50,11 @@ final class NotificationFactory {
                 event.amount(),
                 event.currency(),
                 event.occurredAt()));
+    }
+
+    static Notification forAdvisorMessage(UUID eventId, AdvisorMessageSent event) {
+        return new Notification(event.customerId(), NotificationType.ADVISOR_MESSAGE, eventId,
+                event.conversationId().toString(), null, null, null, null, event.sentAt());
     }
 
     private static Notification notification(

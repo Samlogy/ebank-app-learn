@@ -10,6 +10,15 @@ public interface CurrentUser {
 
     boolean isAdmin();
 
+    /** A Keycloak realm role, such as {@code ADVISOR}. */
+    boolean hasRole(String role);
+
+    default void requireRole(String role) {
+        if (!hasRole(role)) {
+            throw ApiException.forbidden("This operation requires the " + role + " role.");
+        }
+    }
+
     default void requireAdmin() {
         if (!isAdmin()) {
             throw ApiException.forbidden("This operation requires the ADMIN role.");

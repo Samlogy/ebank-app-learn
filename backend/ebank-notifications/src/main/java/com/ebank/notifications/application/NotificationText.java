@@ -17,6 +17,7 @@ public final class NotificationText {
             case TRANSFER_SENT -> "You sent " + amount(notification);
             case TRANSFER_INTERNAL -> "You moved " + amount(notification) + " between your accounts";
             case TRANSFER_CANCELLED -> "Your transfer of " + amount(notification) + " was not made";
+            case ADVISOR_MESSAGE -> "An advisor replied to you";
         };
     }
 
@@ -30,6 +31,8 @@ public final class NotificationText {
                     + " to your account " + masked(notification.getCounterparty()) + ".";
             case TRANSFER_CANCELLED -> "Your transfer of " + amount(notification) + " from your account " + account
                     + " was cancelled and no money moved. Check your balance and try again.";
+            // Never the message itself: it can contain personal details and email is not end-to-end private.
+            case ADVISOR_MESSAGE -> "An EBANK advisor replied in your support conversation.";
         };
         return detail + "\n\nSign in to EBANK to see the details.\n\n"
                 + "You get this message because you were offline. You can turn these messages off in your notification settings.";
@@ -41,6 +44,9 @@ public final class NotificationText {
     }
 
     static String amount(Notification notification) {
+        if (notification.getAmount() == null) {
+            return "";
+        }
         try {
             return new Money(notification.getAmount(), notification.getCurrency()).amount().toPlainString()
                     + " " + notification.getCurrency();

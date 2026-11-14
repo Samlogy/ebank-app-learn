@@ -38,7 +38,10 @@ import tools.jackson.databind.json.JsonMapper;
             "ebank.analytics.enabled=false",
             // No Keycloak in these tests: offline users get no email or SMS.
             "ebank.notifications.keycloak.client-secret=",
-            "ebank.outbox.poll-interval-ms=100"
+            "ebank.outbox.poll-interval-ms=100",
+            // Scripted assistant and in-memory rate limits: no Anthropic API or Redis in tests.
+            "ebank.chatbot.assistant.api-key=",
+            "ebank.chatbot.rate-limit.store=memory"
         })
 @ActiveProfiles("dev")
 @Import(IntegrationTestBase.StubTokens.class)

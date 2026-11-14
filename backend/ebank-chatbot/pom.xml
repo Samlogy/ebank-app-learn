@@ -11,4 +11,49 @@
     </parent>
 
     <artifactId>ebank-chatbot</artifactId>
+
+    <dependencies>
+        <dependency>
+            <groupId>com.ebank</groupId>
+            <artifactId>ebank-common</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>com.ebank</groupId>
+            <artifactId>ebank-auth</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>com.ebank</groupId>
+            <artifactId>ebank-realtime</artifactId>
+        </dependency>
+        <!-- Public APIs only (com.ebank.accounts.api, com.ebank.transactions.api): the assistant's read-only tools. -->
+        <dependency>
+            <groupId>com.ebank</groupId>
+            <artifactId>ebank-accounts</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>com.ebank</groupId>
+            <artifactId>ebank-transactions</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-data-jpa</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-data-redis</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>com.anthropic</groupId>
+            <artifactId>anthropic-java</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>io.micrometer</groupId>
+            <artifactId>micrometer-core</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-test</artifactId>
+            <scope>test</scope>
+        </dependency>
+    </dependencies>
 </project>

@@ -11,7 +11,7 @@ class NotificationsQueue {
     static final UserQueue QUEUE = new UserQueue("/queue/notifications");
 
     @Bean
-    UserQueue notificationsQueue() {
+    UserQueue notificationsUserQueue() {
         return QUEUE;
     }
 }

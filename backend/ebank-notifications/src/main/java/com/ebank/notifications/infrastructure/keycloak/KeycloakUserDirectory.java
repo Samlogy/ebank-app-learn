@@ -80,6 +80,25 @@ class KeycloakUserDirectory implements UserDirectory {
         return Optional.of(new UserContact(email, firstAttribute(user, "phone")));
     }
 
+    @Override
+    public List<UserContact> usersWithRole(String role) {
+        if (!properties.configured()) {
+            return List.of();
+        }
+        KeycloakUser[] users = http.get()
+                .uri(properties.serverUrl() + "/admin/realms/{realm}/roles/{role}/users?briefRepresentation=false&max=200",
+                        properties.realm(), role)
+                .headers(headers -> headers.setBearerAuth(accessToken()))
+                .retrieve()
+                .body(KeycloakUser[].class);
+        if (users == null) {
+            return List.of();
+        }
+        return java.util.Arrays.stream(users)
+                .map(u -> new UserContact(Boolean.TRUE.equals(u.emailVerified()) ? u.email() : null, firstAttribute(u, "phone")))
+                .toList();
+    }
+
     private static String firstAttribute(KeycloakUser user, String name) {
         if (user.attributes() == null) {
             return null;

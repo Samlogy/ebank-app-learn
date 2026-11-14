@@ -29,6 +29,20 @@ class JwtCurrentUser implements CurrentUser {
         return token().getAuthorities().stream().anyMatch(authority -> ADMIN_AUTHORITY.equals(authority.getAuthority()));
     }
 
+    @Override
+    public boolean hasRole(String role) {
+        String wanted = "ROLE_" + role;
+        return token().getAuthorities().stream().anyMatch(authority -> wanted.equals(authority.getAuthority()));
+    }
+
+    @Override
+    public void requireRole(String role) {
+        if (!hasRole(role)) {
+            rejections.countForbidden();
+            throw ApiException.forbidden("This operation requires the " + role + " role.");
+        }
+    }
+
     /** Overridden because these 403s come from business code, not from the security filters. */
     @Override
     public void requireAdmin() {
