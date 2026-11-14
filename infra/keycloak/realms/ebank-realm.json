@@ -21,9 +21,9 @@
   "adminEventsEnabled": true,
   "adminEventsDetailsEnabled": false,
   "smtpServer": {
-    "host": "mailpit",
-    "port": "1025",
-    "from": "noreply@ebank.local",
+    "host": "$(env:KEYCLOAK_SMTP_HOST)",
+    "port": "$(env:KEYCLOAK_SMTP_PORT)",
+    "from": "$(env:KEYCLOAK_SMTP_FROM)",
     "fromDisplayName": "EBANK"
   },
   "roles": {
@@ -63,7 +63,7 @@
       "enabled": true,
       "publicClient": false,
       "clientAuthenticatorType": "client-secret",
-      "secret": "dev-notifications-secret",
+      "secret": "$(env:KEYCLOAK_NOTIFICATIONS_CLIENT_SECRET)",
       "standardFlowEnabled": false,
       "implicitFlowEnabled": false,
       "directAccessGrantsEnabled": false,
@@ -94,16 +94,14 @@
       "directAccessGrantsEnabled": false,
       "serviceAccountsEnabled": false,
       "redirectUris": [
-        "http://localhost:4200/*",
-        "http://app.ebank.localhost/*"
+        "$(env:EBANK_APP_URL)/*"
       ],
       "webOrigins": [
-        "http://localhost:4200",
-        "http://app.ebank.localhost"
+        "$(env:EBANK_APP_URL)"
       ],
       "attributes": {
         "pkce.code.challenge.method": "S256",
-        "post.logout.redirect.uris": "http://localhost:4200/*##http://app.ebank.localhost/*"
+        "post.logout.redirect.uris": "$(env:EBANK_APP_URL)/*"
       },
       "protocolMappers": [
         {
@@ -265,25 +263,10 @@
           "authenticatorConfig": "user-is-not-admin"
         },
         {
-          "authenticator": "conditional-user-role",
-          "requirement": "REQUIRED",
-          "priority": 15,
-          "autheticatorFlow": false,
-          "userSetupAllowed": false,
-          "authenticatorConfig": "user-is-not-advisor"
-        },
-        {
-          "authenticator": "conditional-user-configured",
-          "requirement": "REQUIRED",
+          "flowAlias": "ebank-customer-otp-not-advisor",
+          "requirement": "CONDITIONAL",
           "priority": 20,
-          "autheticatorFlow": false,
-          "userSetupAllowed": false
-        },
-        {
-          "authenticator": "auth-otp-form",
-          "requirement": "REQUIRED",
-          "priority": 30,
-          "autheticatorFlow": false,
+          "autheticatorFlow": true,
           "userSetupAllowed": false
         }
       ]
@@ -304,12 +287,59 @@
           "authenticatorConfig": "user-is-advisor"
         },
         {
+          "flowAlias": "ebank-advisor-otp-not-admin",
+          "requirement": "CONDITIONAL",
+          "priority": 20,
+          "autheticatorFlow": true,
+          "userSetupAllowed": false
+        }
+      ]
+    },
+    {
+      "alias": "ebank-advisor-otp-not-admin",
+      "description": "Advisors who are not admins (admins already got their OTP step)",
+      "providerId": "basic-flow",
+      "topLevel": false,
+      "builtIn": false,
+      "authenticationExecutions": [
+        {
           "authenticator": "conditional-user-role",
           "requirement": "REQUIRED",
-          "priority": 15,
+          "priority": 10,
           "autheticatorFlow": false,
           "userSetupAllowed": false,
           "authenticatorConfig": "user-is-not-admin"
+        },
+        {
+          "authenticator": "auth-otp-form",
+          "requirement": "REQUIRED",
+          "priority": 20,
+          "autheticatorFlow": false,
+          "userSetupAllowed": false
+        }
+      ]
+    },
+    {
+      "alias": "ebank-customer-otp-not-advisor",
+      "description": "Customers (neither admin nor advisor): OTP only if they set it up",
+      "providerId": "basic-flow",
+      "topLevel": false,
+      "builtIn": false,
+      "authenticationExecutions": [
+        {
+          "authenticator": "conditional-user-role",
+          "requirement": "REQUIRED",
+          "priority": 10,
+          "autheticatorFlow": false,
+          "userSetupAllowed": false,
+          "authenticatorConfig": "user-is-not-advisor"
+        },
+        {
+          "authenticator": "conditional-user-configured",
+          "requirement": "REQUIRED",
+          "priority": 15,
+          "autheticatorFlow": false,
+          "userSetupAllowed": false
         },
         {
           "authenticator": "auth-otp-form",

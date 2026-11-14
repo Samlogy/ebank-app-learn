@@ -167,7 +167,7 @@ Domain modules use the same package layout: `api` (public), `application`, `doma
 ├── infra/
 │   ├── compose/              docker-compose.yml for local development
 │   ├── docker/               Dockerfiles and nginx config
-│   ├── keycloak/realms/      Versioned "ebank" realm, imported at startup in dev
+│   ├── keycloak/realms/      Versioned "ebank" realm, applied by keycloak-config-cli on every start and deploy
 │   ├── helm/ebank/           Helm chart for k3s: templates/, values.yaml, values-{dev,qua,prod}.yaml
 │   ├── vault/                Vault layout: policies, per-environment config, apply.sh, k3s install values
 │   ├── ci/                   jenkins/ (Jenkinsfile, agent), sonarqube/, security/ (scan.sh and rules)
@@ -254,7 +254,7 @@ docker compose --profile app down        # keeps data
 docker compose --profile app down -v     # also deletes all databases and Keycloak users
 ```
 
-Keycloak only imports a realm that does not exist yet. To apply changes made to `ebank-realm.json`, either make them in the admin console as well or reset the volumes with `down -v`, which also deletes your local data.
+The realm is applied again by `keycloak-config` on every `docker compose up`, so changes to `ebank-realm.json` take effect without deleting the volumes. Users, and clients that are not in the file (such as the test scripts' `ebank-cli`), are kept.
 
 ## Configuration
 
@@ -342,7 +342,15 @@ Ownership is checked in the service layer:
 
 ### Keycloak realm
 
-The realm is versioned in [ebank-realm.json](infra/keycloak/realms/ebank-realm.json).
+The realm is versioned in [ebank-realm.json](infra/keycloak/realms/ebank-realm.json). [keycloak-config-cli](https://github.com/adorsys/keycloak-config-cli) applies it to the running Keycloak: the `keycloak-config` service in compose, and a Job after every `helm upgrade` in k3s. It's idempotent and creates or updates what the file describes, so every environment gets the same realm. What differs per environment is a `$(env:...)` placeholder:
+
+| Placeholder | compose | k3s |
+|---|---|---|
+| `EBANK_APP_URL` (redirect URIs, web origin, logout) | `http://localhost:4200` | From `hosts.app` |
+| `KEYCLOAK_NOTIFICATIONS_CLIENT_SECRET` | `dev-notifications-secret` | Vault `ebank/<env>/keycloak` |
+| `KEYCLOAK_SMTP_HOST`, `_PORT`, `_FROM` | Mailpit | Vault `ebank/<env>/keycloak/config` |
+
+The OTP flows nest one role condition per sub-flow (`ebank-advisor-otp` → `ebank-advisor-otp-not-admin`, `ebank-customer-otp` → `ebank-customer-otp-not-advisor`), because keycloak-config-cli cannot manage a flow with the same authenticator twice. [auth.spec.ts](front-web/e2e/auth.spec.ts) and the chat test check the result through real sign-ins.
 
 | Setting | Value |
 |---|---|
@@ -628,8 +636,11 @@ Run these from `backend/`:
 | Unit | `src/test` in each module | Domain rules and services |
 | Architecture | `ModuleBoundariesTest` in `ebank-app` | Module boundaries, see [Module boundaries](#module-boundaries) |
 | Integration | `AccountsIT`, `TransfersIT`, `NotificationsIT`, `AnalyticsIT`, `OutboxIT`, `ChatIT` in `ebank-app` | Full HTTP and STOMP requests against a real PostgreSQL through Testcontainers. `AnalyticsIT` also starts Elasticsearch. Other ITs run with `ebank.analytics.enabled=false`. |
+| Real Keycloak | `KeycloakIT` | The versioned realm in a real Keycloak 26.8: real signed tokens, issuer and JWKS, the `ebank-api` audience (another audience is 401), realm roles (CUSTOMER 403 / ADMIN 200), `sub` as the user ID, and a tampered signature |
+| Vault | `VaultConfigIT` | The Vault part of `application.yml` against a real Vault: paths, precedence of environment variables, policy limits, Vault off, fail-fast |
+| API contract | `OpenApiSpecIT` | Writes the served OpenAPI document to `target/openapi/ebank-api.json`, for `scan.sh api` |
 
-The integration tests include concurrency scenarios: simultaneous debits never overdraw an account, opposite transfers don't deadlock, and simultaneous retries with one key move money once. They replace Keycloak with a test JWT decoder, so the real Keycloak flow is not covered yet.
+The integration tests include concurrency scenarios: simultaneous debits never overdraw an account, opposite transfers don't deadlock, and simultaneous retries with one key move money once. They replace Keycloak with a test JWT decoder, except `KeycloakIT`, which covers the real token flow.
 
 ### End-to-end against the local stack
 
@@ -671,6 +682,7 @@ npm run e2e                 # Playwright, against the running local stack (see b
 |---|---|
 | [accounts.spec.ts](front-web/e2e/accounts.spec.ts) | Sign-in through the Keycloak page (PKCE), the funded account and its analytics, and no CSP violation in the console |
 | [notifications.spec.ts](front-web/e2e/notifications.spec.ts) | A transfer received while the app is open bumps the bell live, and "mark all as read" sticks after a reload |
+| [auth.spec.ts](front-web/e2e/auth.spec.ts) | MFA rules of the realm: a customer signs in with a password only, an admin must set up TOTP and then enter codes |
 | [chat.spec.ts](front-web/e2e/chat.spec.ts) | The assistant answers a balance question, the customer asks for an advisor, the online advisor gets it, replies, sees "Seen", and resolves |
 
 The tests create their own users through the Keycloak Admin API, plus the dev-only `ebank-cli` client for API calls. The advisor signs in through the browser with TOTP: the test sets up the authenticator from the secret Keycloak shows, then computes the codes. Without `E2E_BASE_URL` the config starts `ng serve`, which sends no security headers. To test the real image and its CSP, run the `front-web` container on port 4200 and set `E2E_BASE_URL=http://localhost:4200`. The browser comes from `npx playwright install chromium`.
@@ -757,14 +769,25 @@ In `configSource: chart`, `ebank-backend-secrets` holds `DB_USERNAME`, `DB_PASSW
 
 ## CI/CD and security scans
 
-[infra/ci/jenkins/Jenkinsfile](infra/ci/jenkins/Jenkinsfile) runs in an agent built from [agent.Dockerfile](infra/ci/jenkins/agent.Dockerfile) (JDK 21, Node 24, Docker CLI, kubectl, Helm, Vault CLI). It needs a SonarQube server named `sonarqube`, a `dockerhub` credential, a `kubeconfig-dev` file credential and a `vault-config-writer-dev` secret text (a Vault token with the `ebank-dev-config-writer` policy).
+[infra/ci/jenkins/Jenkinsfile](infra/ci/jenkins/Jenkinsfile) runs in an agent built from [agent.Dockerfile](infra/ci/jenkins/agent.Dockerfile) (JDK 21, Node 24, Docker CLI, kubectl, Helm, Vault CLI). It needs a SonarQube server named `sonarqube`, a `dockerhub` credential, and per environment (`dev`, `qua`, `prod`) a `kubeconfig-<env>` file credential and a `vault-approle-<env>` username/password credential (role ID / secret ID of AppRole `ebank-<env>-ci`). Prod deploys are approved by `ebank-release-managers`.
 
 1. Secrets scan.
-2. Backend and front end in parallel: `./mvnw -Pci verify` (all tests, JaCoCo coverage, CycloneDX SBOM) and `npm ci`, tests with coverage, build, npm SBOM.
+2. Backend and front end in parallel: `./mvnw -Pci verify` (all tests, JaCoCo coverage, CycloneDX SBOM, the served OpenAPI document) and `npm ci`, tests with coverage, build, npm SBOM.
 3. SonarQube analysis and quality gate.
-4. SAST, dependency and IaC scans in parallel.
+4. SAST, dependency, IaC and API contract checks in parallel.
 5. Image build and scan.
-6. On `master` only: push to DockerHub, write `infra/vault/dev/*-config.json` to Vault with a token that can only write config (`vault-config-writer-dev` credential, through a port-forward), `helm upgrade --install` with `values-dev.yaml` and the commit as image tag (waits for the pods), then an OWASP ZAP baseline scan.
+6. On `master` only, the images built once are promoted unchanged: push, **deploy dev**, OWASP ZAP baseline on dev, **deploy qua**, approval, **deploy prod**.
+
+Each deploy is [infra/ci/deploy.sh](infra/ci/deploy.sh) `<env>`, which can also be run by hand:
+
+| Step | What happens | On failure |
+|---|---|---|
+| Vault | AppRole login (a 10-minute token that can only write this environment's config), then `infra/vault/apply.sh <env> --config-only` writes `infra/vault/<env>/*-config.json` | Stops before anything is deployed |
+| Helm | `helm upgrade --install --atomic` with `values-<env>.yaml`, the image tag and the realm | Helm rolls back on its own if the pods don't get ready in time |
+| Realm | The `keycloak-config` Job applies the realm | Fails the upgrade, so Helm rolls back |
+| Smoke test | [smoke-test.sh](infra/ci/smoke-test.sh), from inside the cluster: backend health with database, Redis and Vault, `401` without a token, Keycloak realm and signing keys, the front end's `/config.json`. `SMOKE_URL` adds a check through the ingress. | `helm rollback` to the previous revision, and the stage fails |
+
+These paths (the `--atomic` rollback, the rollback after a failed smoke test, AppRole and the writer policy) were checked on a throwaway k3d cluster. The Jenkinsfile itself parses as Groovy, but it hasn't run on a Jenkins server yet.
 
 [infra/ci/security/scan.sh](infra/ci/security/scan.sh) runs the same scanners locally, each in a pinned container, and writes SARIF and HTML reports to `reports/`. It fails on HIGH and CRITICAL findings and on any leaked secret.
 
@@ -776,6 +799,7 @@ In `configSource: chart`, `ebank-backend-secrets` holds `DB_USERNAME`, `DB_PASSW
 | `scan.sh iac` | Helm, Trivy | `helm lint --strict`, then Dockerfiles, compose, and the chart rendered for each environment, one resource per file. Accepted findings, each with a reason, are in [.trivyignore.yaml](infra/ci/security/.trivyignore.yaml). |
 | `scan.sh image <image>` | Trivy | OS packages and JARs of a built image |
 | `scan.sh dast <url>` | OWASP ZAP | Passive baseline scan with [rules.tsv](infra/ci/security/zap/rules.tsv) |
+| `scan.sh api` | openapi-diff | [backend/openapi/ebank-api.json](backend/openapi/ebank-api.json) must match what the backend serves (run `./mvnw verify` first), so every API change shows in the pull request. It must also stay backward compatible with `origin/master` (the previous commit on `master`). After an intended change: `cp backend/ebank-app/target/openapi/ebank-api.json backend/openapi/`. A breaking change needs a new API version. |
 
 The SBOM goal needs online mode: an offline build (`mvn -o`) silently skips it. To try SonarQube locally, start it with `docker compose -f infra/ci/sonarqube/compose.yml up -d`; the host needs `vm.max_map_count` of at least 262144.
 
@@ -816,7 +840,7 @@ Every version is pinned (Maven, npm, images in the Dockerfiles, compose, the Hel
 | Port already in use on `docker compose up` | Another service is on 4200, 5432, 6379, 8025, 8080 or 8180. Stop it. |
 | API calls return `401` with a token that looks valid | Check that its `iss` is `http://localhost:8180/realms/ebank` and its `aud` includes `ebank-api`. A token from another hostname won't validate. |
 | Keycloak login shows an invalid redirect URI | The app must run on `http://localhost:4200`. |
-| Changes to `ebank-realm.json` have no effect | The realm already exists, so the import is skipped. See [Stop the stack](#stop-the-stack). |
+| Changes to `ebank-realm.json` have no effect | They are applied by `keycloak-config` (compose) or the `keycloak-config` Job (k3s). Check its logs: `docker compose logs keycloak-config`. |
 | Verification email didn't arrive | All local email goes to Mailpit at http://localhost:8025. |
 | Backend exits at startup outside `dev` | A required environment variable is missing. See [Environment variables](#environment-variables). |
 | Maven fails with "cannot find symbol" on classes that exist, an empty record, or a missing `*Mapper` bean, while VS Code is open | The editor's Java builder writes stub classes into the same `target/` folder as Maven. Let the editor finish building, then run `./mvnw clean install` again. |

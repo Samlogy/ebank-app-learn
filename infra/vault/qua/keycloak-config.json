@@ -1,0 +1,6 @@
+{
+  "KC_HOSTNAME": "https://auth.qua.ebank.example",
+  "KEYCLOAK_SMTP_HOST": "smtp.example",
+  "KEYCLOAK_SMTP_PORT": "587",
+  "KEYCLOAK_SMTP_FROM": "noreply@qua.ebank.example"
+}

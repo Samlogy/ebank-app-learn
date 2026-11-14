@@ -4,4 +4,5 @@
 path "ebank/data/__ENV__/postgres"         { capabilities = ["read"] }
 path "ebank/data/__ENV__/redis"            { capabilities = ["read"] }
 path "ebank/data/__ENV__/keycloak"         { capabilities = ["read"] }
+path "ebank/data/__ENV__/keycloak/config"  { capabilities = ["read"] }
 path "ebank/data/__ENV__/front-web/config" { capabilities = ["read"] }

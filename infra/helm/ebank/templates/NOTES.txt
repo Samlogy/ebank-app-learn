@@ -3,14 +3,20 @@ EBANK {{ .Chart.Version }} installed in namespace {{ .Release.Namespace }} (imag
   Front end : {{ include "ebank.scheme" . }}://{{ .Values.hosts.app }}
   API       : {{ include "ebank.scheme" . }}://{{ .Values.hosts.api }}/api/v1
   Keycloak  : {{ include "ebank.scheme" . }}://{{ .Values.hosts.auth }}
-{{- if not .Values.secrets.create }}
+{{- if eq (include "ebank.fromVault" .) "true" }}
+
+Config and secrets come from Vault (ebank/{{ .Values.vault.env }}/...). If pods wait, check:
+  kubectl -n {{ .Release.Namespace }} get externalsecrets      # SecretSynced for all four
+  kubectl -n {{ .Release.Namespace }} logs deploy/backend      # Vault login and config load
+{{- else if not .Values.secrets.create }}
 
 The ebank-postgres, ebank-keycloak and ebank-backend-secrets Secrets must already exist in
 {{ .Release.Namespace }}: pods stay in CreateContainerConfigError until they do.
 {{- end }}
-{{- if and .Values.keycloak.devMode (not .Values.keycloak.realm) }}
+{{- if not .Values.keycloak.realm }}
 
-No realm was passed: add --set-file keycloak.realm=infra/keycloak/realms/ebank-realm.json to import it.
+No realm was passed, so the keycloak-config Job did not run: add
+  --set-file keycloak.realm=infra/keycloak/realms/ebank-realm.json
 {{- end }}
 
 Watch the rollout:

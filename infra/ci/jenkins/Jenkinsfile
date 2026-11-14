@@ -2,11 +2,16 @@
 //
 // Needs, configured in Jenkins:
 //   - a SonarQube server named "sonarqube" (Manage Jenkins > System) with its webhook back to Jenkins
-//   - credentials: "dockerhub" (username + access token), "kubeconfig-dev" (secret file)
+//   - credentials: "dockerhub" (username + access token), and per environment (dev, qua, prod)
+//     "kubeconfig-<env>" (secret file) and "vault-approle-<env>" (username = AppRole role ID,
+//     password = secret ID of ebank-<env>-ci, see infra/vault/README.md)
+//   - a "ebank-release-managers" group or user, who approves the prod deploy
 //   - agents that can reach the host's Docker socket (Testcontainers, image builds, scanners)
 //
 // Every branch: secrets scan, build and tests, SonarQube quality gate, SAST, IaC and dependency
-// scans, image build and scan. master also pushes the images, deploys to k3s dev and runs DAST.
+// scans, API contract, image build and scan. master also pushes the images, deploys to dev (with
+// smoke test and automatic rollback), runs DAST, deploys the same images to qua, and to prod after
+// an approval.
 
 pipeline {
     agent {
@@ -111,6 +116,16 @@ pipeline {
                 stage('Infrastructure as code') {
                     steps { sh 'infra/ci/security/scan.sh iac' }
                 }
+                stage('API contract') {
+                    // backend/openapi/ebank-api.json must match what the backend serves (written by
+                    // OpenApiSpecIT during the build) and stay backward compatible with master's.
+                    steps {
+                        sh '''
+                            git fetch --no-tags origin +refs/heads/master:refs/remotes/origin/master || true
+                            infra/ci/security/scan.sh api
+                        '''
+                    }
+                }
             }
         }
 
@@ -148,41 +163,13 @@ pipeline {
             }
         }
 
-        stage('Vault config dev') {
-            when { branch 'master' }
-            steps {
-                // The non-secret config in git (infra/vault/dev/*-config.json) goes to Vault before the
-                // deploy, so the new backend starts with it. The token can only write
-                // ebank/dev/{backend,front-web}/config (policy ebank-dev-config-writer): no secret.
-                withCredentials([
-                    file(credentialsId: 'kubeconfig-dev', variable: 'KUBECONFIG'),
-                    string(credentialsId: 'vault-config-writer-dev', variable: 'VAULT_TOKEN'),
-                ]) {
-                    sh '''
-                        kubectl -n vault port-forward svc/vault 18200:8200 >/dev/null &
-                        trap 'kill $!' EXIT
-                        for i in $(seq 30); do vault status -address=http://127.0.0.1:18200 >/dev/null 2>&1 && break; sleep 1; done
-                        VAULT_ADDR=http://127.0.0.1:18200 infra/vault/apply.sh dev --config-only
-                    '''
-                }
-            }
-        }
-
+        // Build once, promote the same image: dev, then qua, then prod after an approval.
+        // infra/ci/deploy.sh <env>: AppRole login to Vault and config from git, helm upgrade --atomic
+        // (rolled back by Helm if the pods never get ready), smoke test, rollback if it fails.
         stage('Deploy dev') {
             when { branch 'master' }
             steps {
-                withCredentials([file(credentialsId: 'kubeconfig-dev', variable: 'KUBECONFIG')]) {
-                    // --wait: fails the stage if the pods are not ready in time (same as rollout status).
-                    sh '''
-                        helm upgrade --install ebank infra/helm/ebank \
-                          --namespace ebank-dev --create-namespace \
-                          -f infra/helm/ebank/values-dev.yaml \
-                          --set-file keycloak.realm=infra/keycloak/realms/ebank-realm.json \
-                          --set image.registry="$REGISTRY" --set image.tag="$IMAGE_TAG" \
-                          --wait --timeout 10m
-                        helm -n ebank-dev history ebank --max 5
-                    '''
-                }
+                deployTo('dev')
             }
         }
 
@@ -190,6 +177,33 @@ pipeline {
             when { branch 'master' }
             steps {
                 sh 'infra/ci/security/scan.sh dast "$DEV_URL"'
+            }
+        }
+
+        stage('Deploy qua') {
+            when { branch 'master' }
+            steps {
+                deployTo('qua')
+            }
+        }
+
+        stage('Approve prod') {
+            when { branch 'master' }
+            steps {
+                // Holds this build's agent while waiting: a day at most, then the build is aborted
+                // and the image can be promoted from a later build.
+                timeout(time: 1, unit: 'DAYS') {
+                    input message: "Deploy ${env.IMAGE_TAG} to prod? It passed dev, DAST and qua.",
+                          ok: 'Deploy to prod',
+                          submitter: 'ebank-release-managers'
+                }
+            }
+        }
+
+        stage('Deploy prod') {
+            when { branch 'master' }
+            steps {
+                deployTo('prod')
             }
         }
     }
@@ -202,5 +216,20 @@ pipeline {
         cleanup {
             cleanWs(deleteDirs: true, notFailBuild: true)
         }
+    }
+}
+
+/**
+ * One environment's deploy. Credentials per environment:
+ *   kubeconfig-<env>     file: kubeconfig of the environment's cluster
+ *   vault-approle-<env>  username/password: role ID / secret ID of AppRole ebank-<env>-ci
+ *                        (it can only write ebank/<env>/{backend,front-web}/config)
+ */
+def deployTo(String target) {
+    withCredentials([
+        file(credentialsId: "kubeconfig-${target}", variable: 'KUBECONFIG'),
+        usernamePassword(credentialsId: "vault-approle-${target}", usernameVariable: 'VAULT_ROLE_ID', passwordVariable: 'VAULT_SECRET_ID'),
+    ]) {
+        sh "infra/ci/deploy.sh ${target}"
     }
 }

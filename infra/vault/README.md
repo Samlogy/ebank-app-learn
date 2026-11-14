@@ -13,7 +13,8 @@ ebank/<env>/backend/secrets    DB_USERNAME, DB_PASSWORD, REDIS_PASSWORD, KEYCLOA
 ebank/<env>/front-web/config   EBANK_API_ORIGIN, EBANK_WS_ORIGIN, EBANK_KEYCLOAK_ORIGIN, EBANK_KEYCLOAK_REALM, EBANK_KEYCLOAK_CLIENT_ID
 ebank/<env>/postgres           POSTGRES_USER, POSTGRES_PASSWORD, KEYCLOAK_DB_PASSWORD
 ebank/<env>/redis              REDIS_PASSWORD
-ebank/<env>/keycloak           ADMIN_USERNAME, ADMIN_PASSWORD, KC_HOSTNAME
+ebank/<env>/keycloak           ADMIN_USERNAME, ADMIN_PASSWORD, KEYCLOAK_NOTIFICATIONS_CLIENT_SECRET (for the realm)
+ebank/<env>/keycloak/config    KC_HOSTNAME, KEYCLOAK_SMTP_HOST, KEYCLOAK_SMTP_PORT, KEYCLOAK_SMTP_FROM
 ```
 
 `<env>` is `local` (docker compose), `dev`, `qua` or `prod` (k3s). Keys keep the environment variable names that the Spring profiles and the images already use.
@@ -21,16 +22,16 @@ ebank/<env>/keycloak           ADMIN_USERNAME, ADMIN_PASSWORD, KC_HOSTNAME
 | Who | Reads | How |
 |---|---|---|
 | Backend | `backend/config`, `backend/secrets` | Itself, at startup: Spring Cloud Vault (`spring.config.import`, see [application.yml](../../backend/ebank-app/src/main/resources/application.yml)). Token auth in compose, Kubernetes auth in k3s. |
-| PostgreSQL, Redis, Keycloak, front end (nginx) | `postgres`, `redis`, `keycloak`, `front-web/config` | External Secrets Operator copies them into Kubernetes Secrets; Reloader restarts the pods when they change. These images cannot talk to Vault. |
-| CI | writes `backend/config`, `front-web/config` | `apply.sh <env> --config-only` before each deploy |
+| PostgreSQL, Redis, Keycloak and its realm Job, front end (nginx) | `postgres`, `redis`, `keycloak`, `keycloak/config`, `front-web/config` | External Secrets Operator copies them into Kubernetes Secrets; Reloader restarts the pods when they change. These images cannot talk to Vault. |
+| CI | writes `backend/config`, `front-web/config`, `keycloak/config` | AppRole `ebank-<env>-ci`, then `apply.sh <env> --config-only` before each deploy ([infra/ci/deploy.sh](../ci/deploy.sh)) |
 
 Policies ([policies/](policies)), one per component and environment:
 
 | Policy | Allows |
 |---|---|
 | `ebank-<env>-backend` | read `ebank/<env>/backend/*` |
-| `ebank-<env>-eso` | read `ebank/<env>/{postgres,redis,keycloak,front-web/config}` |
-| `ebank-<env>-config-writer` | write `ebank/<env>/{backend,front-web}/config`, read nothing |
+| `ebank-<env>-eso` | read `ebank/<env>/{postgres,redis,keycloak,keycloak/config,front-web/config}` |
+| `ebank-<env>-config-writer` | write `ebank/<env>/{backend,front-web,keycloak}/config`, read nothing. Given to CI through AppRole `ebank-<env>-ci`: tokens live 10 minutes, the secret ID 90 days. |
 
 So a `qua` pod can't read `prod`, the backend can't read the database admin password of another component, and CI can't read any secret. In k3s, the Kubernetes roles only accept the service accounts `ebank-backend` and `ebank-external-secrets` of the namespace `ebank-<env>`, with tokens issued for the `vault` audience. An audit device logs every access (values are HMAC'd, never in clear).
 
@@ -81,10 +82,13 @@ vault kv put -mount=ebank prod/backend/secrets DB_USERNAME=... DB_PASSWORD=... R
   ELASTICSEARCH_USERNAME=... ELASTICSEARCH_PASSWORD=... ANTHROPIC_API_KEY=...
 vault kv put -mount=ebank prod/postgres POSTGRES_USER=... POSTGRES_PASSWORD=... KEYCLOAK_DB_PASSWORD=...
 vault kv put -mount=ebank prod/redis REDIS_PASSWORD=...
-vault kv put -mount=ebank prod/keycloak ADMIN_USERNAME=... ADMIN_PASSWORD=... KC_HOSTNAME=https://auth.ebank.example
+vault kv put -mount=ebank prod/keycloak ADMIN_USERNAME=... ADMIN_PASSWORD=... KEYCLOAK_NOTIFICATIONS_CLIENT_SECRET=...
 
-# CI's token for one environment: config only (store it as the Jenkins credential vault-config-writer-<env>)
-vault token create -policy=ebank-prod-config-writer -period=720h -orphan
+# CI's AppRole for one environment: config only. Store both as the Jenkins username/password
+# credential vault-approle-<env> (username = role ID, password = secret ID). Renew the secret ID
+# before 90 days, and revoke the old one: vault write auth/approle/role/ebank-prod-ci/secret-id-accessor/destroy ...
+vault read -field=role_id auth/approle/role/ebank-prod-ci/role-id
+vault write -f -field=secret_id auth/approle/role/ebank-prod-ci/secret-id
 ```
 
 Then deploy the chart: `values-{dev,qua,prod}.yaml` set `configSource: vault`. A Vault pod restart seals it again: it needs the unseal keys (or an auto-unseal, which `prod` should use).
@@ -97,7 +101,7 @@ Then deploy the chart: `values-{dev,qua,prod}.yaml` set `configSource: vault`. A
 | Backend secret | `vault kv patch -mount=ebank <env>/backend/secrets KEY=value` | `kubectl -n ebank-<env> rollout restart deploy/backend`: the backend reads Vault at startup |
 | PostgreSQL, Redis, Keycloak or front-end value | `vault kv patch -mount=ebank <env>/<path> KEY=value` | ESO syncs within `vault.refreshInterval` (15 min), Reloader restarts the pods. To hurry: `kubectl annotate externalsecret <name> force-sync=$(date +%s) --overwrite` |
 
-**Rotating a password** that two components share (for example the database password, in `postgres` and `backend/secrets`): change it in PostgreSQL first (`ALTER USER ebank PASSWORD '...'`), then in both Vault paths, then restart the backend. The `POSTGRES_PASSWORD` variable only matters when the volume is created. Dynamic database credentials (planned) will remove this duplication.
+**Rotating a password** that two components share (for example the database password, in `postgres` and `backend/secrets`): change it in PostgreSQL first (`ALTER USER ebank PASSWORD '...'`), then in both Vault paths, then restart the backend. The `POSTGRES_PASSWORD` variable only matters when the volume is created. Dynamic database credentials (planned) will remove this duplication. The same goes for `KEYCLOAK_NOTIFICATIONS_CLIENT_SECRET` (in `backend/secrets` and `keycloak`): change both, redeploy (the `keycloak-config` Job sets it on the client), then the backend restarts with it.
 
 ## When Vault is down
 

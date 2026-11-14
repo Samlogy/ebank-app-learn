@@ -39,11 +39,8 @@ spec:
       containers:
         - name: keycloak
           image: {{ .Values.keycloak.image }}
-          {{- if .Values.keycloak.devMode }}
-          args: ["start-dev"{{ if .Values.keycloak.realm }}, "--import-realm"{{ end }}]
-          {{- else }}
-          args: ["start"{{ if .Values.keycloak.realm }}, "--import-realm"{{ end }}]
-          {{- end }}
+          # The realm is applied by the keycloak-config Job after each install or upgrade, not imported.
+          args: [{{ ternary "start-dev" "start" .Values.keycloak.devMode | quote }}]
           env:
             - { name: KC_DB, value: postgres }
             - { name: KC_DB_URL, value: "jdbc:postgresql://postgres:5432/keycloak" }
@@ -82,12 +79,3 @@ spec:
             {{- toYaml .Values.keycloak.resources | nindent 12 }}
           # Writable root: "start" builds the optimized server into its installation directory.
           {{- include "ebank.containerSecurity" (dict "readOnly" false) | nindent 10 }}
-          {{- if .Values.keycloak.realm }}
-          volumeMounts:
-            - { name: realm, mountPath: /opt/keycloak/data/import, readOnly: true }
-          {{- end }}
-      {{- if .Values.keycloak.realm }}
-      volumes:
-        - name: realm
-          secret: { secretName: ebank-realm }
-      {{- end }}

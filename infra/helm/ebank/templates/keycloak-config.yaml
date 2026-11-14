@@ -1,0 +1,75 @@
+{{- /*
+Applies the versioned realm (keycloak.realm) with keycloak-config-cli after every install and
+upgrade. Idempotent: users and clients that are not in the file are kept.
+*/ -}}
+{{- if .Values.keycloak.realm }}
+{{- $vault := eq (include "ebank.fromVault" .) "true" }}
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: keycloak-config
+  labels:
+    {{- include "ebank.labels" (dict "root" $ "name" "keycloak-config") | nindent 4 }}
+  annotations:
+    helm.sh/hook: post-install,post-upgrade
+    helm.sh/hook-weight: "0"
+    # A new Job per release; the last one stays for its logs until the next.
+    helm.sh/hook-delete-policy: before-hook-creation
+spec:
+  backoffLimit: 3
+  activeDeadlineSeconds: 600
+  template:
+    metadata:
+      labels:
+        {{- include "ebank.labels" (dict "root" $ "name" "keycloak-config") | nindent 8 }}
+      annotations:
+        checksum/realm: {{ .Values.keycloak.realm | sha256sum }}
+    spec:
+      restartPolicy: Never
+      automountServiceAccountToken: false
+      {{- include "ebank.podSecurity" (dict "user" 1001) | nindent 6 }}
+      containers:
+        - name: keycloak-config
+          image: {{ .Values.keycloak.configCli.image }}
+          env:
+            - { name: KEYCLOAK_URL, value: "http://keycloak:8080" }
+            - name: KEYCLOAK_USER
+              valueFrom: { secretKeyRef: { name: ebank-keycloak, key: ADMIN_USERNAME } }
+            - name: KEYCLOAK_PASSWORD
+              valueFrom: { secretKeyRef: { name: ebank-keycloak, key: ADMIN_PASSWORD } }
+            # Keycloak may still be starting on a first install.
+            - { name: KEYCLOAK_AVAILABILITYCHECK_ENABLED, value: "true" }
+            - { name: KEYCLOAK_AVAILABILITYCHECK_TIMEOUT, value: "300s" }
+            - { name: IMPORT_FILES_LOCATIONS, value: /config/ebank-realm.json }
+            - { name: IMPORT_VARSUBSTITUTION_ENABLED, value: "true" }
+            - { name: EBANK_APP_URL, value: "{{ include "ebank.scheme" . }}://{{ .Values.hosts.app }}" }
+            {{- if $vault }}
+            # KEYCLOAK_NOTIFICATIONS_CLIENT_SECRET and KEYCLOAK_SMTP_* from ebank/{{ .Values.vault.env }}/keycloak(/config).
+            - name: KEYCLOAK_NOTIFICATIONS_CLIENT_SECRET
+              valueFrom: { secretKeyRef: { name: ebank-keycloak, key: KEYCLOAK_NOTIFICATIONS_CLIENT_SECRET } }
+            - name: KEYCLOAK_SMTP_HOST
+              valueFrom: { secretKeyRef: { name: ebank-keycloak, key: KEYCLOAK_SMTP_HOST } }
+            - name: KEYCLOAK_SMTP_PORT
+              valueFrom: { secretKeyRef: { name: ebank-keycloak, key: KEYCLOAK_SMTP_PORT } }
+            - name: KEYCLOAK_SMTP_FROM
+              valueFrom: { secretKeyRef: { name: ebank-keycloak, key: KEYCLOAK_SMTP_FROM } }
+            {{- else }}
+            - name: KEYCLOAK_NOTIFICATIONS_CLIENT_SECRET
+              valueFrom: { secretKeyRef: { name: ebank-backend-secrets, key: KEYCLOAK_NOTIFICATIONS_CLIENT_SECRET } }
+            - { name: KEYCLOAK_SMTP_HOST, value: {{ .Values.keycloak.smtp.host | quote }} }
+            - { name: KEYCLOAK_SMTP_PORT, value: {{ .Values.keycloak.smtp.port | quote }} }
+            - { name: KEYCLOAK_SMTP_FROM, value: {{ .Values.keycloak.smtp.from | quote }} }
+            {{- end }}
+          resources:
+            requests: { cpu: 100m, memory: 256Mi }
+            limits: { memory: 512Mi }
+          {{- include "ebank.containerSecurity" (dict "readOnly" true) | nindent 10 }}
+          volumeMounts:
+            - { name: realm, mountPath: /config, readOnly: true }
+            - { name: tmp, mountPath: /tmp }
+      volumes:
+        - name: realm
+          secret: { secretName: ebank-realm }
+        - name: tmp
+          emptyDir: {}
+{{- end }}

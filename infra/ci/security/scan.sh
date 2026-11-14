@@ -7,6 +7,7 @@
 #   infra/ci/security/scan.sh iac              helm lint, then Trivy on Dockerfiles, compose and the rendered Helm chart
 #   infra/ci/security/scan.sh image <image>    Trivy on a built image
 #   infra/ci/security/scan.sh dast <url>       OWASP ZAP baseline against a running deployment
+#   infra/ci/security/scan.sh api              API contract: committed and up to date, backward compatible with master
 #   infra/ci/security/scan.sh all              everything except image and dast
 #
 # Fails on HIGH and CRITICAL findings (and on any leaked secret). Reports go to ./reports.
@@ -23,6 +24,7 @@ SEMGREP=semgrep/semgrep:1.141.0
 TRIVY=aquasec/trivy:0.67.2
 ZAP=ghcr.io/zaproxy/zaproxy:2.16.1
 HELM=alpine/helm:3.19.0
+OPENAPI_DIFF=openapitools/openapi-diff:2.1.7
 
 # The same path inside the container as outside, so reports and paths match in Jenkins agents too.
 # Tools run as the calling user: no root-owned files left in the workspace.
@@ -118,6 +120,33 @@ dast() {
     zap-baseline.py -t "$1" -c /zap/config/rules.tsv -r zap-report.html -J zap-report.json -I
 }
 
+# The contract the backend serves (written by OpenApiSpecIT during ./mvnw verify) must be the one
+# committed in backend/openapi/, so every API change shows in the pull request, and it must not
+# break clients of the base version (origin/master; the previous commit when building master).
+api() {
+  section "API contract (openapi-diff)"
+  local contract=backend/openapi/ebank-api.json
+  local served="$ROOT/backend/ebank-app/target/openapi/ebank-api.json"
+  [[ -f "$served" ]] || { echo "No $served: run ./mvnw verify first (OpenApiSpecIT writes it)" >&2; exit 1; }
+  if ! diff -q <(jq -S . "$ROOT/$contract") <(jq -S . "$served") >/dev/null; then
+    echo "The API changed but $contract was not updated. Review the change, then:" >&2
+    echo "  cp backend/ebank-app/target/openapi/ebank-api.json $contract" >&2
+    diff <(jq -S . "$ROOT/$contract") <(jq -S . "$served") | head -40 >&2 || true
+    exit 1
+  fi
+  local base=${API_BASE_REF:-origin/master}
+  if [[ "$(git -C "$ROOT" rev-parse HEAD 2>/dev/null)" == "$(git -C "$ROOT" rev-parse "$base" 2>/dev/null)" ]]; then
+    base=HEAD~1
+  fi
+  if ! git -C "$ROOT" show "$base:$contract" >"$REPORTS/openapi-base.json" 2>/dev/null; then
+    echo "No $contract at $base yet: nothing to compare with"
+    return 0
+  fi
+  echo "Comparing with $base"
+  run "$OPENAPI_DIFF" "$REPORTS/openapi-base.json" "$ROOT/$contract" \
+    --fail-on-incompatible --markdown "$REPORTS/openapi-diff.md" --html "$REPORTS/openapi-diff.html"
+}
+
 case "${1:-all}" in
   secrets) secrets ;;
   sast) sast ;;
@@ -125,6 +154,7 @@ case "${1:-all}" in
   iac) iac ;;
   image) image "${2:-}" ;;
   dast) dast "${2:-}" ;;
+  api) api ;;
   all) secrets; sast; deps; iac ;;
-  *) echo "usage: $0 secrets|sast|deps|iac|image <image>|dast <url>|all" >&2; exit 2 ;;
+  *) echo "usage: $0 secrets|sast|deps|iac|image <image>|dast <url>|api|all" >&2; exit 2 ;;
 esac

@@ -1,0 +1,6 @@
+{
+  "KC_HOSTNAME": "http://auth.ebank.localhost",
+  "KEYCLOAK_SMTP_HOST": "mailpit",
+  "KEYCLOAK_SMTP_PORT": "1025",
+  "KEYCLOAK_SMTP_FROM": "noreply@ebank.local"
+}

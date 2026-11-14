@@ -97,10 +97,20 @@ keycloak:
   image: keycloak/keycloak:26.8.2
   # true: "start-dev". false: "start" (production mode, behind the TLS ingress).
   devMode: false
-  # Realm export imported on first start. Helm cannot read files outside the chart, so pass it with
+  # The versioned realm, applied by keycloak-config-cli (a Job after each install and upgrade), so
+  # changes to the file reach every environment. Helm cannot read files outside the chart, so pass:
   #   --set-file keycloak.realm=infra/keycloak/realms/ebank-realm.json
-  # Stored in a Secret, not a ConfigMap: the export contains a client secret.
+  # Its $(env:...) placeholders: EBANK_APP_URL from hosts.app; the others from Vault
+  # (ebank/<env>/keycloak and .../keycloak/config) or, with configSource chart, from smtp below and
+  # ebank-backend-secrets.
   realm: ""
+  configCli:
+    image: adorsys/keycloak-config-cli:6.5.1-26.5.5
+  # configSource chart only: the realm's SMTP server (password reset and verification emails).
+  smtp:
+    host: smtp.example
+    port: "587"
+    from: noreply@ebank.example
   resources:
     requests: { cpu: 250m, memory: 512Mi }
     limits: { memory: 1Gi }
