@@ -525,9 +525,28 @@ Run these from `backend/`:
 |---|---|---|
 | Unit | `src/test` in each module | Domain rules and services |
 | Architecture | `ModuleBoundariesTest` in `ebank-app` | Module boundaries, see [Module boundaries](#module-boundaries) |
-| Integration | `AccountsIT`, `TransfersIT` in `ebank-app` | Full HTTP requests against a real PostgreSQL through Testcontainers |
+| Integration | `AccountsIT`, `TransfersIT`, `NotificationsIT` in `ebank-app` | Full HTTP and STOMP requests against a real PostgreSQL through Testcontainers |
 
 The integration tests include concurrency scenarios: simultaneous debits never overdraw an account, opposite transfers don't deadlock, and simultaneous retries with one key move money once. They replace Keycloak with a test JWT decoder, so the real Keycloak flow is not covered yet.
+
+### End-to-end against the local stack
+
+[test-notifications.sh](infra/scripts/test-notifications.sh) checks notifications with real Keycloak tokens, real WebSocket connections and real emails in Mailpit (37 checks, under a minute):
+
+```bash
+cd infra/compose && docker compose up -d --wait      # infrastructure
+cd backend/ebank-app && ../mvnw spring-boot:run      # backend, dev profile
+infra/scripts/test-notifications.sh                  # needs curl, jq, node 22+
+```
+
+It creates new users on every run and, in your local Keycloak only, a public `ebank-cli` client with the password grant so curl can get tokens. That client is never in the versioned realm. Its direct grant skips the browser flow, including TOTP.
+
+[stomp-client.mjs](infra/scripts/stomp-client.mjs) is a dependency-free STOMP client for trying `/ws` by hand:
+
+```bash
+node infra/scripts/stomp-client.mjs --token "$TOKEN"                    # print each pushed notification
+node infra/scripts/stomp-client.mjs --token "$TOKEN" --subscribe /queue/x  # refused: ERROR, then CLOSED
+```
 
 ### Front end
 
@@ -544,7 +563,7 @@ npm run build               # Production build, enforces bundle size budgets
 | Signal | How |
 |---|---|
 | Health | `/actuator/health/liveness` and `/actuator/health/readiness` |
-| Metrics | `/actuator/prometheus`, with HTTP latency histograms, `ebank_security_rejections_total{status="401"\|"403"}`, `ebank_notifications_created_total{type}`, `ebank_notifications_delivered_total{channel,outcome}` and `ebank_websocket_sessions` |
+| Metrics | `/actuator/prometheus`, with HTTP latency histograms, `ebank_security_rejections_total{status="401"\|"403"}`, `ebank_notifications_recorded_total{type}`, `ebank_notifications_delivered_total{channel,outcome}` and `ebank_websocket_sessions` |
 | Logs | Plain text in `dev`, ECS JSON on stdout in `qua` and `prod`, ready to ship to ELK |
 | Traces | OpenTelemetry over OTLP. Metrics and logs are deliberately not sent over OTLP. |
 

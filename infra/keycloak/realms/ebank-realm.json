@@ -54,7 +54,7 @@
     {
       "clientId": "ebank-notifications",
       "name": "EBANK notifications (service account)",
-      "description": "Backend only: reads email and phone of offline users. The secret is for local dev; set a different one in every other environment.",
+      "description": "Backend only: reads email and phone of offline users. kc-admin-api is required by Keycloak 26.8+ to call the Admin API. The secret is for local dev; set a different one in every other environment.",
       "enabled": true,
       "publicClient": false,
       "clientAuthenticatorType": "client-secret",
@@ -62,7 +62,13 @@
       "standardFlowEnabled": false,
       "implicitFlowEnabled": false,
       "directAccessGrantsEnabled": false,
-      "serviceAccountsEnabled": true
+      "serviceAccountsEnabled": true,
+      "defaultClientScopes": [
+        "basic",
+        "roles",
+        "kc-admin-api"
+      ],
+      "optionalClientScopes": []
     },
     {
       "clientId": "ebank-api",

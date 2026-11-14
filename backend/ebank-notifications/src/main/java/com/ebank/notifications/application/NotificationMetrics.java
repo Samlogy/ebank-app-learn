@@ -6,7 +6,7 @@ import io.micrometer.core.instrument.MeterRegistry;
 import org.springframework.stereotype.Component;
 
 /**
- * {@code ebank_notifications_created_total{type}} and
+ * {@code ebank_notifications_recorded_total{type}} and
  * {@code ebank_notifications_delivered_total{channel, outcome}}.
  */
 @Component
@@ -19,7 +19,8 @@ class NotificationMetrics {
     }
 
     void created(NotificationType type) {
-        Counter.builder("ebank.notifications.created")
+        // Not "created": Prometheus treats a _created suffix as a timestamp and strips it.
+        Counter.builder("ebank.notifications.recorded")
                 .description("Notifications recorded")
                 .tag("type", type.name())
                 .register(registry)

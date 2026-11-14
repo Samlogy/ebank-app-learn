@@ -26,7 +26,7 @@ const origin = args.origin ?? 'http://localhost:4200';
 
 function frame(command, headers = {}, body = '') {
   const lines = Object.entries(headers).map(([k, v]) => `${k}:${v}`);
-  return `${command}\n${lines.join('\n')}\n\n${body}\0`;
+  return `${command}\n${lines.map((line) => line + '\n').join('')}\n${body}\0`;
 }
 
 function parse(raw) {
