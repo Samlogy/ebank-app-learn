@@ -5,6 +5,16 @@
       "CORS_ALLOWED_ORIGINS" (printf "%s://%s" $scheme .Values.hosts.app) -}}
 {{- $config := merge (deepCopy .Values.backend.config) $derived -}}
 {{- $actuatorPort := ternary "8081" "8080" (eq .Values.backend.actuatorPort "management") -}}
+{{- $vault := eq (include "ebank.fromVault" .) "true" -}}
+{{- if $vault }}
+# Its identity for Vault's Kubernetes auth (role ebank-{{ .Values.vault.env }}-backend).
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: ebank-backend
+  labels:
+    {{- include "ebank.labels" (dict "root" $ "name" "backend") | nindent 4 }}
+{{- else }}
 # Non-secret settings. Secrets live in the ebank-backend-secrets Secret.
 apiVersion: v1
 kind: ConfigMap
@@ -16,6 +26,7 @@ data:
   {{- range $key, $value := $config }}
   {{ $key }}: {{ $value | toString | quote }}
   {{- end }}
+{{- end }}
 ---
 apiVersion: v1
 kind: Service
@@ -53,21 +64,43 @@ spec:
         prometheus.io/scrape: "true"
         prometheus.io/port: {{ $actuatorPort | quote }}
         prometheus.io/path: /actuator/prometheus
-        # Restart the pods when the config (or, in dev, the secrets) change.
+        {{- if not $vault }}
+        # Restart the pods when the config (or, in dev, the secrets) change. With Vault, a config
+        # change is rolled out by CI (kubectl rollout restart) after it writes to Vault.
         checksum/config: {{ $config | toJson | sha256sum }}
+        {{- end }}
         {{- if .Values.secrets.create }}
         checksum/secret: {{ .Values.secrets.backend | toJson | sha256sum }}
         {{- end }}
     spec:
       terminationGracePeriodSeconds: 40
+      {{- if $vault }}
+      serviceAccountName: ebank-backend
+      {{- end }}
+      # The Kubernetes API token is never needed; the Vault token is projected below.
+      automountServiceAccountToken: false
       {{- include "ebank.podSecurity" (dict "user" 10001 "group" 10001) | nindent 6 }}
       containers:
         - name: backend
           image: {{ include "ebank.image" (dict "root" $ "image" .Values.backend.image) }}
           imagePullPolicy: {{ .Values.image.pullPolicy }}
+          {{- if $vault }}
+          # Only where the config is: everything else is read from Vault at startup.
+          env:
+            - { name: SPRING_PROFILES_ACTIVE, value: {{ .Values.backend.config.SPRING_PROFILES_ACTIVE | quote }} }
+            - { name: VAULT_ENABLED, value: "true" }
+            - { name: VAULT_FAIL_FAST, value: "true" }
+            - { name: VAULT_ADDR, value: {{ .Values.vault.address | quote }} }
+            - { name: VAULT_AUTHENTICATION, value: KUBERNETES }
+            - { name: VAULT_ROLE, value: "ebank-{{ .Values.vault.env }}-backend" }
+            - { name: VAULT_KUBERNETES_PATH, value: {{ .Values.vault.kubernetesAuthPath | quote }} }
+            - { name: VAULT_KUBERNETES_TOKEN_FILE, value: /var/run/secrets/vault/token }
+            - { name: EBANK_ENV, value: {{ .Values.vault.env | quote }} }
+          {{- else }}
           envFrom:
             - configMapRef: { name: ebank-backend-config }
             - secretRef: { name: ebank-backend-secrets }
+          {{- end }}
           ports:
             - { name: http, containerPort: 8080 }
             - { name: management, containerPort: 8081 }   # actuator in qua/prod, never routed by the ingress
@@ -90,6 +123,19 @@ spec:
           {{- include "ebank.containerSecurity" (dict "readOnly" true) | nindent 10 }}
           volumeMounts:
             - { name: tmp, mountPath: /tmp }
+            {{- if $vault }}
+            - { name: vault-token, mountPath: /var/run/secrets/vault, readOnly: true }
+            {{- end }}
       volumes:
         - name: tmp
           emptyDir: {}
+        {{- if $vault }}
+        # A short-lived token for Vault only (audience "vault"), rotated by the kubelet.
+        - name: vault-token
+          projected:
+            sources:
+              - serviceAccountToken:
+                  audience: vault
+                  expirationSeconds: 3600
+                  path: token
+        {{- end }}

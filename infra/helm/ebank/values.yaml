@@ -28,6 +28,26 @@ ingress:
     # cert-manager ClusterIssuer (installed separately). Empty: bring your own ebank-tls Secret.
     clusterIssuer: ""
 
+# Where config and secrets come from.
+#   chart  the ebank-backend-config ConfigMap (backend.config) and Kubernetes Secrets: created by the
+#          chart in dev (secrets.create), by hand in qua and prod.
+#   vault  Vault is the only source (see infra/vault/README.md):
+#          - the backend reads ebank/<vault.env>/backend/{config,secrets} itself (Spring Cloud Vault,
+#            Kubernetes auth with the ebank-backend ServiceAccount);
+#          - External Secrets Operator copies ebank/<vault.env>/{postgres,redis,keycloak,front-web/config}
+#            into Secrets for the pods that cannot read Vault, and Reloader restarts them on a change.
+#          Needs Vault, External Secrets Operator and Reloader in the cluster.
+configSource: chart
+
+vault:
+  # Reachable from the namespace. The default is the hashicorp/vault chart installed in "vault".
+  address: http://vault.vault:8200
+  # Environment name in the Vault paths and roles (ebank/<env>/..., ebank-<env>-backend).
+  env: ""
+  kubernetesAuthPath: kubernetes
+  # How often External Secrets Operator re-reads Vault.
+  refreshInterval: 15m
+
 # Secrets. With create: false (qua, prod) they must exist before the install, never from git:
 #   kubectl -n <ns> create secret generic ebank-backend-secrets --from-env-file=backend.env
 #   kubectl -n <ns> create secret generic ebank-postgres --from-env-file=postgres.env   # POSTGRES_USER, POSTGRES_PASSWORD, KEYCLOAK_DB_PASSWORD

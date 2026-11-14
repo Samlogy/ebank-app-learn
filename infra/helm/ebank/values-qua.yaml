@@ -1,6 +1,8 @@
-# qua: create the three secrets first (see values.yaml, "secrets"), then
+# qua: config and secrets come from Vault (ebank/qua/...): see infra/vault/README.md. Then
 #   helm upgrade --install ebank infra/helm/ebank -n ebank-qua --create-namespace \
 #     -f infra/helm/ebank/values-qua.yaml --set image.tag=<git sha>
+
+configSource: vault
 
 hosts:
   app: app.qua.ebank.example
@@ -10,4 +12,7 @@ hosts:
 backend:
   config:
     SPRING_PROFILES_ACTIVE: qua
-    MAIL_FROM: "EBANK <noreply@qua.ebank.example>"
+
+# Paths ebank/qua/..., roles ebank-qua-backend and ebank-qua-eso.
+vault:
+  env: qua

@@ -1,0 +1,44 @@
+# Vault in k3s with the official chart (hashicorp/vault 0.34.1):
+#   helm upgrade --install vault hashicorp/vault --version 0.34.1 -n vault --create-namespace \
+#     -f infra/vault/k3s/vault-values.yaml
+# One server with integrated (Raft) storage: right for dev and qua on a single-node k3s. For prod,
+# run 3 replicas (server.ha) and an auto-unseal (cloud KMS or transit) instead of manual unseal keys.
+global:
+  # The EBANK pods talk to Vault inside the cluster; TLS ends at the ingress if Vault's UI is exposed.
+  tlsDisable: true
+
+injector:
+  # Not used: the backend reads Vault itself and External Secrets Operator serves the other pods.
+  enabled: false
+
+server:
+  image:
+    repository: hashicorp/vault
+    tag: 2.2.1          # same version as docker compose
+  standalone:
+    enabled: true
+    config: |
+      ui = true
+      listener "tcp" {
+        address     = "[::]:8200"
+        cluster_address = "[::]:8201"
+        tls_disable = 1
+      }
+      storage "raft" {
+        path = "/vault/data"
+      }
+      service_registration "kubernetes" {}
+  dataStorage:
+    enabled: true
+    size: 2Gi
+  auditStorage:
+    enabled: false      # the audit device writes to stdout (see apply.sh): collected with the pod logs
+  resources:
+    requests: { cpu: 100m, memory: 256Mi }
+    limits: { memory: 512Mi }
+  # The chart's defaults already run Vault as non-root with a read-only root filesystem.
+  networkPolicy:
+    enabled: false
+
+ui:
+  enabled: true

@@ -1,5 +1,9 @@
 # Qualification. Connection settings have no defaults, so a missing one fails at startup.
 spring:
+  cloud:
+    vault:
+      # With Vault on, a missing or unreadable config stops the startup.
+      fail-fast: ${VAULT_FAIL_FAST:true}
   security:
     oauth2:
       resourceserver:

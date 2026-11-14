@@ -23,6 +23,6 @@ ENV NGINX_ENVSUBST_OUTPUT_DIR=/tmp/nginx \
     NGINX_ENVSUBST_FILTER=^EBANK_ \
     EBANK_API_ORIGIN=http://localhost:8080 \
     EBANK_WS_ORIGIN=ws://localhost:8080 \
-    EBANK_AUTH_ORIGIN=http://localhost:8180 \
+    EBANK_KEYCLOAK_ORIGIN=http://localhost:8180 \
     EBANK_KEYCLOAK_REALM=ebank \
     EBANK_KEYCLOAK_CLIENT_ID=ebank-web

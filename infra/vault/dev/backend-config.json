@@ -1,0 +1,15 @@
+{
+  "DB_URL": "jdbc:postgresql://postgres:5432/ebank",
+  "REDIS_HOST": "redis",
+  "REDIS_SSL_ENABLED": "false",
+  "KEYCLOAK_ISSUER_URI": "http://auth.ebank.localhost/realms/ebank",
+  "KEYCLOAK_JWK_SET_URI": "http://keycloak:8080/realms/ebank/protocol/openid-connect/certs",
+  "KEYCLOAK_URL": "http://keycloak:8080",
+  "CORS_ALLOWED_ORIGINS": "http://app.ebank.localhost",
+  "MAIL_HOST": "mailpit",
+  "MAIL_PORT": "1025",
+  "MAIL_FROM": "EBANK <noreply@ebank.local>",
+  "ELASTICSEARCH_URIS": "http://elasticsearch:9200",
+  "OTLP_TRACES_ENABLED": "false",
+  "OTLP_TRACES_ENDPOINT": "http://otel-collector.monitoring:4318/v1/traces"
+}

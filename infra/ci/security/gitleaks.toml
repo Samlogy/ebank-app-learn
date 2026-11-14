@@ -11,6 +11,6 @@ regexes = [
 ]
 paths = [
   '''infra/compose/docker-compose\.yml''',
-  '''infra/helm/ebank/values-dev\.yaml''',
+  '''infra/vault/(local|dev)/[a-z-]+\.json''',
   '''.*/src/test/.*''',
 ]

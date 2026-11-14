@@ -1,0 +1,12 @@
+{
+  "DB_URL": "jdbc:postgresql://postgres:5432/ebank",
+  "REDIS_HOST": "redis",
+  "KEYCLOAK_ISSUER_URI": "http://localhost:8180/realms/ebank",
+  "KEYCLOAK_JWK_SET_URI": "http://keycloak:8080/realms/ebank/protocol/openid-connect/certs",
+  "KEYCLOAK_URL": "http://keycloak:8080",
+  "CORS_ALLOWED_ORIGINS": "http://localhost:4200",
+  "MAIL_HOST": "mailpit",
+  "MAIL_PORT": "1025",
+  "ELASTICSEARCH_URIS": "http://elasticsearch:9200",
+  "OTLP_TRACES_ENDPOINT": "http://otel-collector:4318/v1/traces"
+}

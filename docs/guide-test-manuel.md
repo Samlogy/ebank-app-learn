@@ -104,6 +104,7 @@ Accès par chemin : chemins publics (`/actuator/**`, Swagger en dev), autres `/a
 | Dossier | Contenu |
 |---|---|
 | `infra/compose` | `docker-compose.yml` local. Sans profil : postgres, redis, elasticsearch, mailpit, keycloak (+ sa DB). `--profile app` : backend + front. `--profile observability` : Prometheus, Grafana, OTel collector, Jaeger, ELK |
+| `infra/vault` | **Vault = source unique de la config et des secrets** de chaque environnement (`ebank/<env>/backend/config`, `.../secrets`, `front-web/config`, `postgres`, `redis`, `keycloak`). Le backend lit Vault lui-même au démarrage (Spring Cloud Vault : jeton en compose, auth Kubernetes en k3s) ; External Secrets Operator copie le reste en Secrets Kubernetes, Reloader redémarre les pods. Une policy par composant et par environnement. En compose, `vault` (mode dev, http://localhost:8200, jeton `dev-root-token`) est rempli par `vault-seed` depuis `infra/vault/local`. |
 | `infra/docker` | Dockerfiles multi-stage, non-root (backend 8080/8081, front sur nginx 8080) |
 | `infra/keycloak/realms` | `ebank-realm.json`, importé au premier démarrage seulement (sinon `down -v`) |
 | `infra/helm/ebank` | Chart Helm pour k3s : `templates/` (postgres, redis, keycloak, backend, front, ingress Traefik, NetworkPolicy, ES et Mailpit en dev), `values.yaml` (défauts type prod) + `values-dev/qua/prod.yaml`. Déploiement : `helm upgrade --install ebank infra/helm/ebank -n ebank-<env> -f values-<env>.yaml`. Backend en 1 replica (broker STOMP en mémoire), pods durcis |
@@ -157,6 +158,8 @@ uuid() { cat /proc/sys/kernel/random/uuid; }
 curl -s $API/actuator/health | jq          # {"status":"UP", ...}
 curl -s $API/actuator/health/readiness | jq
 curl -s $KC/realms/ebank | jq .realm       # "ebank"
+curl -s $API/actuator/health | jq .components.vault   # {"status":"UP"} : la config du backend vient de Vault
+VAULT_ADDR=http://localhost:8200 VAULT_TOKEN=dev-root-token vault kv get -mount=ebank local/backend/config   # ou l'UI http://localhost:8200
 ```
 
 ## 2.1 Préparer Keycloak (dev uniquement)

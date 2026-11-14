@@ -45,6 +45,7 @@ This README describes how the project works today. For the design rationale and 
 | Redis | Rate limits for the chat. Configured as the Spring cache, which no code uses yet. |
 | `infra/observability` | Prometheus with alert rules, Alertmanager (alerts emailed to Mailpit locally), runbooks in [docs/runbooks](docs/runbooks), Grafana dashboard, OpenTelemetry collector and Jaeger, ELK for logs (compose profile `observability`) |
 | `infra/helm` | Helm chart for k3s, with dev, qua and prod values |
+| `infra/vault` | Vault holds the config and secrets of every environment: the backend reads it with Spring Cloud Vault, External Secrets Operator serves the other pods. Compose runs a dev Vault seeded from git. |
 | `infra/ci` | Jenkins pipeline, SonarQube, security scans (gitleaks, Semgrep, Trivy, OWASP ZAP), SBOMs |
 
 ## Tech stack
@@ -168,6 +169,7 @@ Domain modules use the same package layout: `api` (public), `application`, `doma
 │   ├── docker/               Dockerfiles and nginx config
 │   ├── keycloak/realms/      Versioned "ebank" realm, imported at startup in dev
 │   ├── helm/ebank/           Helm chart for k3s: templates/, values.yaml, values-{dev,qua,prod}.yaml
+│   ├── vault/                Vault layout: policies, per-environment config, apply.sh, k3s install values
 │   ├── ci/                   jenkins/ (Jenkinsfile, agent), sonarqube/, security/ (scan.sh and rules)
 │   ├── observability/        prometheus/, grafana/, otel/, elk/
 │   └── scripts/              End-to-end test scripts and a STOMP client
@@ -206,6 +208,7 @@ docker compose up -d --wait
 | PostgreSQL | `localhost:5432`, database `ebank` | `ebank` / `ebank` | Always |
 | Redis | `localhost:6379` | None | Always |
 | Elasticsearch (analytics) | http://localhost:9200 | None, security off in dev | Always |
+| Vault (config and secrets) | http://localhost:8200 | Root token `dev-root-token` | Always, seeded by `vault-seed` from [infra/vault/local](infra/vault/local) |
 
 These defaults are for local containers only. To override them, create `infra/compose/.env`, which git ignores.
 
@@ -265,6 +268,20 @@ Shared settings are in [application.yml](backend/ebank-app/src/main/resources/ap
 | Public Actuator endpoints | All exposed | Health, info, Prometheus | Health, info, Prometheus |
 | Trace sampling | 100%, export off by default | 100% | 10% |
 | Log format | Plain text, `com.ebank` at `DEBUG` | ECS JSON | ECS JSON |
+
+### Where the settings come from
+
+[Vault](infra/vault/README.md) holds the config and the secrets of each environment (`ebank/<env>/backend/config` and `.../secrets`). With `VAULT_ENABLED=true`, the backend reads them at startup through Spring Cloud Vault. The keys are the variable names below, so the `${...}` placeholders of the profiles resolve from Vault, and a real environment variable still wins. Without Vault (the default, and for a backend started on the host), the variables below are read from the environment as before.
+
+| Variable | Default | Description |
+|---|---|---|
+| `VAULT_ENABLED` | `false` | Load config and secrets from Vault |
+| `VAULT_ADDR` | `http://localhost:8200` | Vault address |
+| `VAULT_AUTHENTICATION` | `TOKEN` | `TOKEN` (with `VAULT_TOKEN`) or `KUBERNETES` (service account token, role `VAULT_ROLE`) |
+| `VAULT_TOKEN` | Empty | Token auth, compose only (`local-backend-token`) |
+| `VAULT_ROLE`, `VAULT_KUBERNETES_PATH`, `VAULT_KUBERNETES_TOKEN_FILE` | `ebank-backend`, `kubernetes`, the default service account token | Kubernetes auth. The chart projects a token for the `vault` audience. |
+| `EBANK_ENV` | `dev` | Environment folder in Vault: `local`, `dev`, `qua` or `prod` |
+| `VAULT_FAIL_FAST` | `false` in `dev`, `true` in `qua` and `prod` | Refuse to start when Vault can't be read |
 
 ### Environment variables
 
@@ -696,18 +713,16 @@ Both images use multi-stage builds, run as non-root users and are built by Compo
 
 [infra/helm/ebank](infra/helm/ebank) is a Helm 3 chart: PostgreSQL, Redis, Keycloak, backend, front end and a Traefik ingress, plus Elasticsearch and Mailpit when `devServices.enabled` is true (dev only). [values.yaml](infra/helm/ebank/values.yaml) holds the production-like defaults, and each environment overrides what differs in `values-dev.yaml`, `values-qua.yaml` or `values-prod.yaml`.
 
+Every environment takes its config and secrets from Vault (`configSource: vault` in `values-{dev,qua,prod}.yaml`). Install Vault, External Secrets Operator and Reloader once, unseal Vault and apply the environment's layout as described in [infra/vault/README.md](infra/vault/README.md). For `qua` and `prod`, also write their secrets in Vault by hand. Then:
+
 ```bash
-# dev: plain HTTP on *.ebank.localhost, dev-only secrets created by the chart, realm imported
+# dev: plain HTTP on *.ebank.localhost, realm imported
 helm upgrade --install ebank infra/helm/ebank -n ebank-dev --create-namespace \
   -f infra/helm/ebank/values-dev.yaml \
   --set-file keycloak.realm=infra/keycloak/realms/ebank-realm.json
 
-# qua / prod: create the secrets first, never from git
-kubectl create namespace ebank-prod
-kubectl -n ebank-prod create secret generic ebank-backend-secrets --from-env-file=backend.env
-kubectl -n ebank-prod create secret generic ebank-postgres --from-env-file=postgres.env   # POSTGRES_USER, POSTGRES_PASSWORD, KEYCLOAK_DB_PASSWORD
-kubectl -n ebank-prod create secret generic ebank-keycloak --from-env-file=keycloak.env   # ADMIN_USERNAME, ADMIN_PASSWORD
-helm upgrade --install ebank infra/helm/ebank -n ebank-prod \
+# qua / prod
+helm upgrade --install ebank infra/helm/ebank -n ebank-prod --create-namespace \
   -f infra/helm/ebank/values-prod.yaml --set image.tag=<git sha> --wait
 
 # Useful
@@ -721,33 +736,35 @@ helm -n ebank-prod rollback ebank <revision>                               # go 
 | `image.registry`, `image.tag` | `docker.io/ebank`, chart `appVersion` | Backend and front-end images. CI sets the tag to the commit. |
 | `hosts.app`, `hosts.api`, `hosts.auth` | `*.ebank.example` | Ingress hosts. The issuer URI, CORS origin and Keycloak hostname are derived from them. |
 | `ingress.tls.enabled`, `ingress.tls.clusterIssuer` | `true`, empty | HTTPS on the `websecure` entrypoint; a cert-manager issuer adds the annotation. |
-| `secrets.create` | `false` | `true` (dev only) creates the three Secrets from `secrets.postgres`, `secrets.keycloak`, `secrets.backend`. |
-| `backend.config` | see `values.yaml` | Extra keys of the `ebank-backend-config` ConfigMap. |
+| `configSource` | `chart` (`vault` in the environment files) | `vault`: the backend reads Vault itself, and External Secrets Operator creates `ebank-postgres`, `ebank-redis`, `ebank-keycloak` and `ebank-front-web-config`. `chart`: the ConfigMap and hand-made Secrets of earlier versions. |
+| `vault.address`, `vault.env`, `vault.refreshInterval` | `http://vault.vault:8200`, per file, `15m` | Where Vault is, the environment folder and roles (`ebank-<env>-backend`, `ebank-<env>-eso`), and how often ESO re-reads it |
+| `secrets.create` | `false` | `configSource: chart` only: `true` creates the three Secrets from `secrets.postgres`, `secrets.keycloak`, `secrets.backend`. |
+| `backend.config` | see `values.yaml` | `configSource: chart`: the keys of the `ebank-backend-config` ConfigMap. With Vault, only `SPRING_PROFILES_ACTIVE` is used. |
 | `backend.actuatorPort` | `management` | Probe and scrape port: `http` in dev, where actuator has no separate port. |
 | `keycloak.devMode`, `keycloak.realm` | `false`, empty | `start-dev` instead of `start`; a realm passed with `--set-file` is imported on first start. |
 | `devServices.enabled` | `false` | In-cluster Elasticsearch and Mailpit. |
 | `networkPolicy.*` | enabled | Which namespaces may reach ports 8080 and 8081. |
 
-Resource names are fixed (`backend`, `postgres`, `keycloak`...) because the backend config uses them as host names, so install one release per namespace. Pods restart on their own when `backend.config` (or, in dev, a secret value) changes, through `checksum/*` annotations.
+Resource names are fixed (`backend`, `postgres`, `keycloak`...) because the backend config uses them as host names, so install one release per namespace. With Vault, Reloader restarts Redis, Keycloak and the front end when ESO updates their Secrets. The backend reads Vault at startup: after changing one of its values, restart it (`kubectl rollout restart deploy/backend`), or let the next deploy do it. In `configSource: chart`, `checksum/*` annotations restart the pods instead.
 
-`ebank-backend-secrets` holds `DB_USERNAME`, `DB_PASSWORD`, `REDIS_PASSWORD`, `MAIL_USERNAME`, `MAIL_PASSWORD`, `KEYCLOAK_NOTIFICATIONS_CLIENT_SECRET`, `ELASTICSEARCH_USERNAME`, `ELASTICSEARCH_PASSWORD` and `ANTHROPIC_API_KEY`.
+In `configSource: chart`, `ebank-backend-secrets` holds `DB_USERNAME`, `DB_PASSWORD`, `REDIS_PASSWORD`, `MAIL_USERNAME`, `MAIL_PASSWORD`, `KEYCLOAK_NOTIFICATIONS_CLIENT_SECRET`, `ELASTICSEARCH_USERNAME`, `ELASTICSEARCH_PASSWORD` and `ANTHROPIC_API_KEY`.
 
 - **Backend: one replica on purpose.** The STOMP broker, presence and the assistant's per-conversation locks are in memory. Scaling out needs a broker relay first.
 - **Backend: management port.** Probes and Prometheus use port 8081, which the ingress never routes. `NetworkPolicy` lets only Traefik reach 8080 and only the `monitoring` namespace reach 8081.
 - **Pod hardening.** Every pod runs non-root, without privilege escalation, with all capabilities dropped and the `RuntimeDefault` seccomp profile. Root filesystems are read-only except Keycloak's and the dev Elasticsearch's. Service links are off: the `redis` Service would otherwise inject `REDIS_PORT=tcp://...`, which Spring reads as its port.
 - **TLS.** prod gets certificates from cert-manager (`letsencrypt-prod` ClusterIssuer, installed separately).
-- **Front end configuration.** The chart sets `EBANK_API_ORIGIN`, `EBANK_WS_ORIGIN` and `EBANK_AUTH_ORIGIN` from `hosts.*`, so `/config.json` and the CSP match each environment with the same image.
+- **Front end configuration.** The chart sets `EBANK_API_ORIGIN`, `EBANK_WS_ORIGIN` and `EBANK_KEYCLOAK_ORIGIN` from `hosts.*`, so `/config.json` and the CSP match each environment with the same image.
 
 ## CI/CD and security scans
 
-[infra/ci/jenkins/Jenkinsfile](infra/ci/jenkins/Jenkinsfile) runs in an agent built from [agent.Dockerfile](infra/ci/jenkins/agent.Dockerfile) (JDK 21, Node 24, Docker CLI, kubectl, Helm). It needs a SonarQube server named `sonarqube`, a `dockerhub` credential and a `kubeconfig-dev` file credential.
+[infra/ci/jenkins/Jenkinsfile](infra/ci/jenkins/Jenkinsfile) runs in an agent built from [agent.Dockerfile](infra/ci/jenkins/agent.Dockerfile) (JDK 21, Node 24, Docker CLI, kubectl, Helm, Vault CLI). It needs a SonarQube server named `sonarqube`, a `dockerhub` credential, a `kubeconfig-dev` file credential and a `vault-config-writer-dev` secret text (a Vault token with the `ebank-dev-config-writer` policy).
 
 1. Secrets scan.
 2. Backend and front end in parallel: `./mvnw -Pci verify` (all tests, JaCoCo coverage, CycloneDX SBOM) and `npm ci`, tests with coverage, build, npm SBOM.
 3. SonarQube analysis and quality gate.
 4. SAST, dependency and IaC scans in parallel.
 5. Image build and scan.
-6. On `master` only: push to DockerHub, `helm upgrade --install` with `values-dev.yaml` and the commit as image tag (waits for the pods), then an OWASP ZAP baseline scan.
+6. On `master` only: push to DockerHub, write `infra/vault/dev/*-config.json` to Vault with a token that can only write config (`vault-config-writer-dev` credential, through a port-forward), `helm upgrade --install` with `values-dev.yaml` and the commit as image tag (waits for the pods), then an OWASP ZAP baseline scan.
 
 [infra/ci/security/scan.sh](infra/ci/security/scan.sh) runs the same scanners locally, each in a pinned container, and writes SARIF and HTML reports to `reports/`. It fails on HIGH and CRITICAL findings and on any leaked secret.
 
@@ -768,7 +785,7 @@ nginx sends these on every page and asset:
 
 | Header | Value and reason |
 |---|---|
-| `Content-Security-Policy` | `script-src 'self'`: no inline script runs. `connect-src` and `frame-src` only allow the API and Keycloak origins, from `EBANK_API_ORIGIN`, `EBANK_WS_ORIGIN` and `EBANK_AUTH_ORIGIN` (set by compose and the Helm chart). `frame-ancestors 'self'` stops clickjacking. `style-src` keeps `'unsafe-inline'` because Angular inserts component styles at runtime. |
+| `Content-Security-Policy` | `script-src 'self'`: no inline script runs. `connect-src` and `frame-src` only allow the API and Keycloak origins, from `EBANK_API_ORIGIN`, `EBANK_WS_ORIGIN` and `EBANK_KEYCLOAK_ORIGIN` (set by compose and the Helm chart). `frame-ancestors 'self'` stops clickjacking. `style-src` keeps `'unsafe-inline'` because Angular inserts component styles at runtime. |
 | `X-Frame-Options`, `X-Content-Type-Options`, `Referrer-Policy` | `SAMEORIGIN`, `nosniff`, `no-referrer` |
 | `Permissions-Policy` | Camera, geolocation, payment and USB off. Microphone allowed for the app itself, for voice messages. |
 | `Strict-Transport-Security` | One year. Browsers ignore it over plain HTTP, so local development is unaffected. |

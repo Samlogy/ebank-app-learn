@@ -35,6 +35,8 @@
         <mapstruct.version>1.6.3</mapstruct.version>
         <archunit.version>1.5.1</archunit.version>
         <anthropic-java.version>3.3.0</anthropic-java.version>
+        <!-- 2026.0 (made for Boot 4.1) has no GA release yet; 2025.1 works with Boot 4.1, see VaultConfigIT. -->
+        <spring-cloud.version>2025.1.4</spring-cloud.version>
         <jacoco.version>0.8.14</jacoco.version>
         <cyclonedx.version>2.9.1</cyclonedx.version>
         <sonar-maven-plugin.version>5.2.0.4988</sonar-maven-plugin.version>
@@ -42,6 +44,13 @@
 
     <dependencyManagement>
         <dependencies>
+            <dependency>
+                <groupId>org.springframework.cloud</groupId>
+                <artifactId>spring-cloud-dependencies</artifactId>
+                <version>${spring-cloud.version}</version>
+                <type>pom</type>
+                <scope>import</scope>
+            </dependency>
             <dependency>
                 <groupId>org.mapstruct</groupId>
                 <artifactId>mapstruct</artifactId>

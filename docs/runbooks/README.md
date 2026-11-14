@@ -14,6 +14,7 @@ One page per Prometheus alert in [ebank-alerts.yml](../../infra/observability/pr
 | `EbankNotificationDeliveryFailing` | warning | [ebank-notification-delivery-failing.md](ebank-notification-delivery-failing.md) |
 | `EbankAssistantUnavailable` | warning | [ebank-assistant-unavailable.md](ebank-assistant-unavailable.md) |
 | `EbankAdvisorQueueSlow` | warning | [ebank-advisor-queue-slow.md](ebank-advisor-queue-slow.md) |
+| (no alert yet) Vault unavailable or sealed | - | [vault-unavailable.md](vault-unavailable.md) |
 
 ## Commands used in the pages
 

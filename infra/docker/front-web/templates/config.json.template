@@ -2,7 +2,7 @@
   "apiUrl": "${EBANK_API_ORIGIN}/api/v1",
   "wsUrl": "${EBANK_WS_ORIGIN}/ws",
   "keycloak": {
-    "url": "${EBANK_AUTH_ORIGIN}",
+    "url": "${EBANK_KEYCLOAK_ORIGIN}",
     "realm": "${EBANK_KEYCLOAK_REALM}",
     "clientId": "${EBANK_KEYCLOAK_CLIENT_ID}"
   }

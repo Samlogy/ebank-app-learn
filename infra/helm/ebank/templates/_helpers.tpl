@@ -62,3 +62,26 @@ securityContext:
 {{- end }}
 {{- end }}
 {{- end }}
+
+{{/* True when Vault is the source of config and secrets. Fails on an unknown value or a missing vault.env. */}}
+{{- define "ebank.fromVault" -}}
+{{- if eq .Values.configSource "vault" -}}
+{{- if not .Values.vault.env }}{{ fail "vault.env is required when configSource is vault" }}{{ end -}}
+{{- if .Values.secrets.create }}{{ fail "secrets.create must be false when configSource is vault: the Secrets come from Vault" }}{{ end -}}
+true
+{{- else if ne .Values.configSource "chart" -}}
+{{- fail (printf "configSource must be chart or vault, not %q" .Values.configSource) -}}
+{{- end -}}
+{{- end }}
+
+{{/* The Secret holding REDIS_PASSWORD: shared with the backend in chart mode, its own in vault mode. */}}
+{{- define "ebank.redisSecret" -}}
+{{ ternary "ebank-redis" "ebank-backend-secrets" (eq (include "ebank.fromVault" .) "true") }}
+{{- end }}
+
+{{/* Restart this workload when one of its Secrets changes (ESO updates them in place). */}}
+{{- define "ebank.reloader" -}}
+{{- if eq (include "ebank.fromVault" .) "true" }}
+reloader.stakater.com/auto: "true"
+{{- end }}
+{{- end }}

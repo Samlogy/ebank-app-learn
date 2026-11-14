@@ -17,6 +17,10 @@ metadata:
   name: keycloak
   labels:
     {{- include "ebank.labels" (dict "root" $ "name" "keycloak") | nindent 4 }}
+  {{- with include "ebank.reloader" . }}
+  annotations:
+    {{- . | nindent 4 }}
+  {{- end }}
 spec:
   replicas: 1
   selector:
@@ -47,7 +51,11 @@ spec:
             - name: KC_DB_PASSWORD
               valueFrom: { secretKeyRef: { name: ebank-postgres, key: KEYCLOAK_DB_PASSWORD } }
             - name: KC_HOSTNAME
+              {{- if eq (include "ebank.fromVault" .) "true" }}
+              valueFrom: { secretKeyRef: { name: ebank-keycloak, key: KC_HOSTNAME } }
+              {{- else }}
               valueFrom: { configMapKeyRef: { name: ebank-backend-config, key: KEYCLOAK_PUBLIC_URL } }
+              {{- end }}
             - { name: KC_HOSTNAME_BACKCHANNEL_DYNAMIC, value: "true" }
             - { name: KC_HTTP_ENABLED, value: "true" }
             - { name: KC_PROXY_HEADERS, value: xforwarded }

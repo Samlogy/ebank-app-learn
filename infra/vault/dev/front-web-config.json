@@ -1,0 +1,7 @@
+{
+  "EBANK_API_ORIGIN": "http://api.ebank.localhost",
+  "EBANK_WS_ORIGIN": "ws://api.ebank.localhost",
+  "EBANK_KEYCLOAK_ORIGIN": "http://auth.ebank.localhost",
+  "EBANK_KEYCLOAK_REALM": "ebank",
+  "EBANK_KEYCLOAK_CLIENT_ID": "ebank-web"
+}

@@ -1,6 +1,8 @@
-# prod: create the three secrets first (see values.yaml, "secrets"), then
+# prod: config and secrets come from Vault (ebank/prod/...): see infra/vault/README.md. Then
 #   helm upgrade --install ebank infra/helm/ebank -n ebank-prod --create-namespace \
 #     -f infra/helm/ebank/values-prod.yaml --set image.tag=<git sha>
+
+configSource: vault
 
 hosts:
   app: app.ebank.example
@@ -14,7 +16,6 @@ ingress:
 backend:
   config:
     SPRING_PROFILES_ACTIVE: prod
-    MAIL_FROM: "EBANK <noreply@ebank.example>"
   resources:
     requests: { cpu: "1", memory: 1536Mi }
     limits: { memory: 2Gi }
@@ -23,3 +24,7 @@ postgres:
   resources:
     requests: { cpu: 500m, memory: 1Gi }
     limits: { memory: 4Gi }
+
+# Paths ebank/prod/..., roles ebank-prod-backend and ebank-prod-eso.
+vault:
+  env: prod

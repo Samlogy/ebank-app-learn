@@ -3,6 +3,39 @@
 spring:
   application:
     name: ebank
+
+  # Config and secrets from Vault (KV v2, mount "ebank"), off unless VAULT_ENABLED=true:
+  #   ebank/<EBANK_ENV>/backend/config    non-secret settings: DB_URL, REDIS_HOST, KEYCLOAK_ISSUER_URI...
+  #   ebank/<EBANK_ENV>/backend/secrets   DB_PASSWORD, REDIS_PASSWORD, ANTHROPIC_API_KEY...
+  # Keys keep the environment variable names, so the ${DB_URL}-style placeholders of the profile
+  # files resolve from Vault unchanged. Real environment variables still win over Vault.
+  # See infra/vault/README.md.
+  config:
+    import: "optional:vault://"
+  cloud:
+    vault:
+      enabled: ${VAULT_ENABLED:false}
+      uri: ${VAULT_ADDR:http://localhost:8200}
+      # TOKEN locally (VAULT_TOKEN), KUBERNETES in k3s (the pod's service account token).
+      authentication: ${VAULT_AUTHENTICATION:TOKEN}
+      token: ${VAULT_TOKEN:}
+      kubernetes:
+        role: ${VAULT_ROLE:ebank-backend}
+        kubernetes-path: ${VAULT_KUBERNETES_PATH:kubernetes}
+        # A token projected for the "vault" audience (see the Helm chart), not the API server one.
+        service-account-token-file: ${VAULT_KUBERNETES_TOKEN_FILE:/var/run/secrets/kubernetes.io/serviceaccount/token}
+      # qua and prod refuse to start without their config instead of running half-configured.
+      fail-fast: ${VAULT_FAIL_FAST:false}
+      connection-timeout: 5000
+      read-timeout: 15000
+      kv:
+        enabled: true
+        backend: ebank
+        backend-version: 2
+        application-name: ${EBANK_ENV:dev}/backend/config
+        default-context: ${EBANK_ENV:dev}/backend/secrets
+        # No per-profile paths: the environment is already in the path.
+        profiles: ""
   threads:
     virtual:
       enabled: true

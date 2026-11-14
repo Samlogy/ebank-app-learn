@@ -1,7 +1,7 @@
 # Local development only. Ports are bound to localhost and the default credentials are
 # for local containers. Override any of them in infra/compose/.env, which git ignores.
 #
-#   docker compose up -d --wait                  infrastructure only
+#   docker compose up -d --wait                  infrastructure only (Vault included, seeded from infra/vault/local)
 #   docker compose --profile app up -d --build --wait    infrastructure, backend and frontend
 #   docker compose --profile observability up -d --wait  adds Prometheus, Grafana, OTel, Jaeger, Logstash, Filebeat, Kibana
 # A unique name: "ebank" and "ebank-app" are used by older stacks on this machine,
@@ -73,6 +73,38 @@ services:
       timeout: 3s
       retries: 20
 
+  # Config and secrets of the backend (ebank/local/...). Dev server: in memory, unsealed, root token
+  # "dev-root-token". Everything is written again from infra/vault/local by vault-seed on each start.
+  vault:
+    image: hashicorp/vault:2.2.1
+    command: ["server", "-dev", "-dev-listen-address=0.0.0.0:8200"]
+    environment:
+      VAULT_DEV_ROOT_TOKEN_ID: ${VAULT_DEV_ROOT_TOKEN:-dev-root-token}
+      SKIP_SETCAP: "true"
+    ports:
+      - "127.0.0.1:8200:8200"
+    healthcheck:
+      test: ["CMD", "sh", "-c", "VAULT_ADDR=http://127.0.0.1:8200 vault status"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+
+  # One-shot: mount, policies, the backend's token and the values from infra/vault/local.
+  vault-seed:
+    image: hashicorp/vault:2.2.1
+    entrypoint: ["sh", "/vault-config/apply.sh", "local"]
+    environment:
+      VAULT_ADDR: http://vault:8200
+      VAULT_TOKEN: ${VAULT_DEV_ROOT_TOKEN:-dev-root-token}
+      SKIP_SETCAP: "true"
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}    # optional: written to ebank/local/backend/secrets
+    volumes:
+      - ../vault:/vault-config:ro
+    depends_on:
+      vault:
+        condition: service_healthy
+    restart: "no"
+
   keycloak:
     image: keycloak/keycloak:26.8.2
     command: ["start-dev", "--import-realm"]
@@ -112,17 +144,13 @@ services:
       dockerfile: ../infra/docker/backend/Dockerfile
     environment:
       SPRING_PROFILES_ACTIVE: dev
-      DB_URL: jdbc:postgresql://postgres:5432/ebank
-      DB_USERNAME: ${DB_USERNAME:-ebank}
-      DB_PASSWORD: ${DB_PASSWORD:-ebank}
-      REDIS_HOST: redis
-      # Tokens name localhost as their issuer, but this container fetches keys over the compose network.
-      KEYCLOAK_ISSUER_URI: http://localhost:8180/realms/ebank
-      KEYCLOAK_JWK_SET_URI: http://keycloak:8080/realms/ebank/protocol/openid-connect/certs
-      KEYCLOAK_URL: http://keycloak:8080    # Admin API, to read email and phone for offline notifications
-      MAIL_HOST: mailpit
-      ELASTICSEARCH_URIS: http://elasticsearch:9200
-      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}    # empty: scripted assistant
+      # Config and secrets come from Vault: ebank/local/backend/config and .../secrets, written from
+      # infra/vault/local by vault-seed. A variable set here would win over Vault, so only the Vault
+      # connection is set. The token is limited to ebank/local/backend/* by its policy.
+      VAULT_ENABLED: "true"
+      VAULT_ADDR: http://vault:8200
+      VAULT_TOKEN: local-backend-token
+      EBANK_ENV: local
       # ECS JSON logs for Filebeat, traces to the collector (both used by --profile observability).
       LOGGING_STRUCTURED_FORMAT_CONSOLE: ecs
       OTLP_TRACES_ENABLED: ${OTLP_TRACES_ENABLED:-false}
@@ -132,6 +160,8 @@ services:
     ports:
       - "127.0.0.1:8080:8080"
     depends_on:
+      vault-seed:
+        condition: service_completed_successfully
       postgres:
         condition: service_healthy
       redis:
