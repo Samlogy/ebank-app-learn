@@ -52,6 +52,19 @@
   },
   "clients": [
     {
+      "clientId": "ebank-notifications",
+      "name": "EBANK notifications (service account)",
+      "description": "Backend only: reads email and phone of offline users. The secret is for local dev; set a different one in every other environment.",
+      "enabled": true,
+      "publicClient": false,
+      "clientAuthenticatorType": "client-secret",
+      "secret": "dev-notifications-secret",
+      "standardFlowEnabled": false,
+      "implicitFlowEnabled": false,
+      "directAccessGrantsEnabled": false,
+      "serviceAccountsEnabled": true
+    },
+    {
       "clientId": "ebank-api",
       "name": "EBANK API",
       "enabled": true,
@@ -92,6 +105,18 @@
           }
         }
       ]
+    }
+  ],
+  "users": [
+    {
+      "username": "service-account-ebank-notifications",
+      "enabled": true,
+      "serviceAccountClientId": "ebank-notifications",
+      "clientRoles": {
+        "realm-management": [
+          "view-users"
+        ]
+      }
     }
   ],
   "browserFlow": "ebank-browser",

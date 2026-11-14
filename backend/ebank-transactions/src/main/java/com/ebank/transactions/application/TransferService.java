@@ -9,12 +9,16 @@ import com.ebank.accounts.api.AccountsApi;
 import com.ebank.auth.api.CurrentUser;
 import com.ebank.common.error.ApiException;
 import com.ebank.common.money.Money;
+import com.ebank.common.outbox.Outbox;
 import com.ebank.transactions.domain.EntryType;
 import com.ebank.transactions.domain.LedgerEntry;
 import com.ebank.transactions.domain.Transfer;
 import com.ebank.transactions.infrastructure.persistence.LedgerEntryRepository;
+import com.ebank.transactions.api.TransactionCancelled;
+import com.ebank.transactions.api.TransactionCompleted;
 import com.ebank.transactions.infrastructure.persistence.TransferRepository;
 import java.math.BigDecimal;
+import java.time.Instant;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -40,13 +44,19 @@ public class TransferService {
     private final LedgerEntryRepository ledger;
     private final AccountsApi accounts;
     private final CurrentUser currentUser;
+    private final Outbox outbox;
 
     public TransferService(
-            TransferRepository transfers, LedgerEntryRepository ledger, AccountsApi accounts, CurrentUser currentUser) {
+            TransferRepository transfers,
+            LedgerEntryRepository ledger,
+            AccountsApi accounts,
+            CurrentUser currentUser,
+            Outbox outbox) {
         this.transfers = transfers;
         this.ledger = ledger;
         this.accounts = accounts;
         this.currentUser = currentUser;
+        this.outbox = outbox;
     }
 
     /**
@@ -72,8 +82,10 @@ public class TransferService {
         // The balance is a sum over the ledger, so "check, then debit" is only safe while the
         // account is locked. Otherwise two simultaneous debits could both pass the check.
         Map<String, AccountView> locked = accounts.lock(List.of(senderId, receiverId));
-        requireUsableSender(locked.get(senderId), userId, money);
-        requireUsableReceiver(locked.get(receiverId), money);
+        AccountView sender = locked.get(senderId);
+        AccountView receiver = locked.get(receiverId);
+        requireUsableSender(sender, userId, money);
+        requireUsableReceiver(receiver, money);
 
         // Checked again: a request with the same key may have finished while this one waited for the lock.
         earlier = replay(userId, command.idempotencyKey(), senderId, receiverId, money, command.reference());
@@ -85,8 +97,10 @@ public class TransferService {
         if (balanceOf(senderId, money.currency()).isLessThan(money)) {
             transfer.cancel(INSUFFICIENT_FUNDS);
             log.info("Transfer {} cancelled: {}", transfer.getId(), INSUFFICIENT_FUNDS);
+            publishCancelled(transfer, sender.userId());
         } else {
             post(transfer, senderId, receiverId, money);
+            publishCompleted(transfer, sender.userId(), receiver.userId());
         }
         return new TransferResult(transfer, false);
     }
@@ -106,10 +120,12 @@ public class TransferService {
         if (earlier.isPresent()) {
             return earlier.get();
         }
-        requireUsableReceiver(locked.get(receiverId), money);
+        AccountView receiver = locked.get(receiverId);
+        requireUsableReceiver(receiver, money);
 
         Transfer transfer = save(new Transfer(senderId, receiverId, money, command.reference(), command.idempotencyKey(), userId));
         post(transfer, senderId, receiverId, money);
+        publishCompleted(transfer, null, receiver.userId());
         return new TransferResult(transfer, false);
     }
 
@@ -162,6 +178,34 @@ public class TransferService {
         ledger.save(new LedgerEntry(transfer.getId(), receiverId, EntryType.CREDIT, money));
         transfer.complete();
         log.info("Transfer {} completed", transfer.getId());
+    }
+
+    /** Written in the same transaction as the transfer, so the event exists exactly when the transfer does. */
+    private void publishCompleted(Transfer transfer, String senderUserId, String receiverUserId) {
+        Money money = transfer.money();
+        outbox.append(TransactionCompleted.TYPE, transfer.getTransactionId(), new TransactionCompleted(
+                transfer.getTransactionId(),
+                transfer.getSenderAccountId(),
+                transfer.getReceiverAccountId(),
+                senderUserId,
+                receiverUserId,
+                money.amount(),
+                money.currency(),
+                transfer.getReference(),
+                Instant.now()));
+    }
+
+    private void publishCancelled(Transfer transfer, String senderUserId) {
+        Money money = transfer.money();
+        outbox.append(TransactionCancelled.TYPE, transfer.getTransactionId(), new TransactionCancelled(
+                transfer.getTransactionId(),
+                transfer.getSenderAccountId(),
+                transfer.getReceiverAccountId(),
+                senderUserId,
+                money.amount(),
+                money.currency(),
+                transfer.getFailureReason(),
+                Instant.now()));
     }
 
     private Money balanceOf(String accountId, String currency) {

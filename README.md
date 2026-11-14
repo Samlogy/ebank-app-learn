@@ -28,12 +28,14 @@ This README describes how the project works today. For the design rationale and 
 | Area | State |
 |---|---|
 | `ebank-common`, `ebank-auth`, `ebank-accounts`, `ebank-transactions` | Implemented and tested |
+| `ebank-notifications` | Implemented and tested: stored notifications, REST API, live push over WebSocket/STOMP, email fallback for offline users |
+| Transactional outbox | Implemented in `ebank-common`, delivered by an in-process relay (no broker yet) |
 | Front end: sign-in, accounts, transactions, profile, theming | Implemented against the real API |
-| Front end: notifications | Works, but derived in the browser from recent transfers |
+| Front end: notifications | Works, but still derived in the browser from recent transfers: not yet switched to the new API |
 | Front end: chatbot | UI only, uses a simulated transport (`DemoChatTransport`) |
 | Front end: analytics | Placeholder page |
-| `ebank-notifications`, `ebank-analytics`, `ebank-chatbot` | Empty modules (folder structure only) |
-| Transactional outbox, message broker | Not implemented |
+| `ebank-analytics`, `ebank-chatbot` | Empty modules (folder structure only) |
+| Message broker (Kafka or RabbitMQ), SMS provider | Not implemented. SMS is a logging stub. |
 | Redis | Configured as the Spring cache, but no code uses the cache yet |
 | `infra/k3s`, `infra/ci`, `infra/observability` | Empty placeholders |
 
@@ -92,6 +94,9 @@ flowchart TD
     Transactions --> Accounts[ebank-accounts]
     Transactions --> Auth[ebank-auth]
     Transactions --> Common[ebank-common]
+    Notifications -->|events in transactions.api only| Transactions
+    Notifications --> Auth
+    Notifications --> Common
     Accounts --> Auth
     Accounts --> Common
     Auth --> Common
@@ -104,7 +109,9 @@ Modules only talk through public APIs, never through each other's classes or tab
 - `transactions` may only use the `com.ebank.accounts.api` package of `accounts`, not its `application`, `domain`, `infrastructure` or `web` packages.
 - `accounts` must not depend on `transactions`.
 - `accounts` and `transactions` must not depend on `com.ebank.auth.security`. They use the `CurrentUser` interface from `com.ebank.auth.api`.
-- `common` must not depend on `accounts`, `transactions` or `auth`.
+- `common` must not depend on `accounts`, `transactions`, `auth` or `notifications`.
+- `notifications` may only use the event records in `com.ebank.transactions.api`, and nothing from `accounts`.
+- `accounts` and `transactions` must not depend on `notifications`: they publish events and don't know who listens.
 
 The public APIs are:
 
@@ -113,6 +120,9 @@ The public APIs are:
 | `AccountsApi` | Check account access, list a user's account IDs, lock accounts for a transaction |
 | `AccountClosingGuard` | Lets another module veto closing an account, without `accounts` depending on it. `transactions` implements it to refuse closing an account that still holds money. |
 | `CurrentUser` | The authenticated caller: user ID and admin check |
+| `TokenAuthenticator` | Validates an access token outside HTTP (STOMP `CONNECT`), with the same checks and role mapping |
+| `Outbox` / `OutboxEventHandler` | Publish a domain event in the current transaction / consume one type of event |
+| `TransactionCompleted`, `TransactionCancelled` | Events published by `transactions` through the outbox |
 
 Domain modules use the same package layout: `api` (public), `application`, `domain`, `infrastructure` and `web`.
 
@@ -122,11 +132,11 @@ Domain modules use the same package layout: `api` (public), `application`, `doma
 .
 ├── backend/                  Maven multi-module project
 │   ├── ebank-app/            Entry point, config, Flyway baseline, integration and architecture tests
-│   ├── ebank-common/         Money, RFC 9457 error handling, pagination
+│   ├── ebank-common/         Money, RFC 9457 error handling, pagination, transactional outbox, scheduler
 │   ├── ebank-auth/           Security config, Keycloak role mapping, CurrentUser
 │   ├── ebank-accounts/       Accounts, lifecycle, modification history
 │   ├── ebank-transactions/   Transfers, deposits, ledger, balances, search
-│   ├── ebank-notifications/  Empty, planned
+│   ├── ebank-notifications/  Notifications, preferences, WebSocket push, email/SMS fallback
 │   ├── ebank-analytics/      Empty, planned
 │   └── ebank-chatbot/        Empty, planned
 ├── front-web/                Angular application
@@ -247,6 +257,12 @@ Shared settings are in [application.yml](backend/ebank-app/src/main/resources/ap
 | `CORS_ALLOWED_ORIGINS` | Yes | `http://localhost:4200` | Allowed browser origins |
 | `OTLP_TRACES_ENDPOINT` | Yes | `http://localhost:4318/v1/traces` | OTLP trace collector |
 | `OTLP_TRACES_ENABLED` | No, `dev` only | `false` | Turns on trace export in `dev` |
+| `MAIL_HOST` | Yes | `localhost` (Mailpit) | SMTP host for fallback emails |
+| `MAIL_PORT` | No, defaults to 587 | `1025` | SMTP port |
+| `MAIL_USERNAME` / `MAIL_PASSWORD` | Yes | Not used | SMTP credentials (STARTTLS required in `qua`/`prod`) |
+| `MAIL_FROM` | Yes | `EBANK <noreply@ebank.local>` | Sender of fallback emails |
+| `KEYCLOAK_URL` | Yes | `http://localhost:8180` | Keycloak base URL for the Admin API (email and phone lookup) |
+| `KEYCLOAK_NOTIFICATIONS_CLIENT_SECRET` | Yes | `dev-notifications-secret` | Secret of the `ebank-notifications` service account. Empty turns email/SMS fallback off. |
 
 Two issuer settings are needed because browsers and containers reach Keycloak at different addresses. Tokens always name `http://localhost:8180` as their issuer, while the backend container fetches keys from `http://keycloak:8080`.
 
@@ -283,7 +299,7 @@ The realm is versioned in [ebank-realm.json](infra/keycloak/realms/ebank-realm.j
 
 | Setting | Value |
 |---|---|
-| Clients | `ebank-web` (public, PKCE), `ebank-api` (bearer-only, used as the audience) |
+| Clients | `ebank-web` (public, PKCE), `ebank-api` (bearer-only, used as the audience), `ebank-notifications` (confidential service account with only `view-users`, to read email and phone) |
 | Roles | `CUSTOMER` (default for new users), `ADMIN` |
 | MFA | TOTP required for `ADMIN`, optional for `CUSTOMER` |
 | Registration | Open, with email verification. Password reset enabled. |
@@ -417,6 +433,26 @@ Errors follow [RFC 9457](https://www.rfc-editor.org/rfc/rfc9457) `ProblemDetail`
 | 500 | `INTERNAL_ERROR` |
 | 503 | `SERVICE_UNAVAILABLE` |
 
+### Notifications
+
+| Method | Path | Description | Access |
+|---|---|---|---|
+| `GET` | `/notifications` | List, newest first. `unreadOnly=true` filters. Paged. | Own only |
+| `GET` | `/notifications/unread-count` | `{"count": n}` | Own only |
+| `PATCH` | `/notifications/{id}/read` | Mark one as read | Own only, 404 otherwise |
+| `POST` | `/notifications/read-all` | Mark all as read, returns `{"updated": n}` | Own only |
+| `GET` / `PUT` | `/notifications/preferences` | `{"emailEnabled", "smsEnabled"}`. Defaults: email on, SMS off. | Own only |
+
+Types: `TRANSFER_RECEIVED`, `TRANSFER_SENT`, `TRANSFER_INTERNAL` (between two of the user's own accounts) and `TRANSFER_CANCELLED` (refused, for example for insufficient funds; only the sender is told).
+
+**Live push.** Connect a STOMP client to `ws://<host>/ws`, send the token in the `CONNECT` frame's `Authorization: Bearer ...` header, and subscribe to `/user/queue/notifications`. Each frame is the same JSON as a list item.
+
+- Only that subscription is allowed. Any other `SUBSCRIBE` or `SEND` closes the connection.
+- The connection is closed with code `4001` when its token expires. Before that, send a fresh token for the same user as a `SEND` to `/app/token` with an `Authorization` header, or reconnect.
+- The handshake only accepts origins listed in `CORS_ALLOWED_ORIGINS`.
+
+**Flow.** `transactions` writes `TransactionCompleted` or `TransactionCancelled` to `outbox_event` in the transfer's own transaction. The relay delivers each event to `notifications` in a new transaction. If the user is subscribed, the notification is pushed after commit. If not, a `notifications.FallbackRequested` event is written to the outbox, and its handler emails (or texts) the user based on their preferences. Emails only go to a verified address, mask account IDs and never include the transfer reference. Mail is skipped if the notification was read in the meantime, and replaced by a push if the user has come online.
+
 ## Database
 
 Flyway owns the schema, and Hibernate only validates it (`ddl-auto: validate`).
@@ -427,6 +463,11 @@ Flyway owns the schema, and Hibernate only validates it (`ddl-auto: validate`).
 | `account_history` | `accounts` | Audit trail of account changes |
 | `transfers` | `transactions` | Transfers, with unique `(initiated_by, idempotency_key)` |
 | `ledger_entries` | `transactions` | Debit and credit entries, unique per `(transfer_id, type)` |
+| `outbox_event` | `common` | Domain events waiting for delivery (`PENDING`), delivered (`PUBLISHED`, deleted after 7 days) or given up after 10 attempts (`FAILED`) |
+| `notification` | `notifications` | One row per user and event, unique per `(source_event_id, user_id)` so a redelivered event never notifies twice |
+| `notification_preference` | `notifications` | Offline channels per user. No row means the defaults. |
+
+The outbox delivers **at least once**: handlers must be idempotent. Failed events are retried with exponential backoff (2 s, 4 s, ... up to 15 min). Rows are claimed with `FOR UPDATE SKIP LOCKED`, so several instances can run the relay. Only the exception type is stored in `last_error`, never its message.
 
 `transfers` and `ledger_entries` store account IDs as plain values with no foreign key to `accounts`, because modules don't reach into each other's tables.
 
@@ -503,7 +544,7 @@ npm run build               # Production build, enforces bundle size budgets
 | Signal | How |
 |---|---|
 | Health | `/actuator/health/liveness` and `/actuator/health/readiness` |
-| Metrics | `/actuator/prometheus`, with HTTP latency histograms and `ebank_security_rejections_total{status="401"\|"403"}` |
+| Metrics | `/actuator/prometheus`, with HTTP latency histograms, `ebank_security_rejections_total{status="401"\|"403"}`, `ebank_notifications_created_total{type}`, `ebank_notifications_delivered_total{channel,outcome}` and `ebank_websocket_sessions` |
 | Logs | Plain text in `dev`, ECS JSON on stdout in `qua` and `prod`, ready to ship to ELK |
 | Traces | OpenTelemetry over OTLP. Metrics and logs are deliberately not sent over OTLP. |
 

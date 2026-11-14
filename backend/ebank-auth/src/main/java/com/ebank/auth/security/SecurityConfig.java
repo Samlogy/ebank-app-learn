@@ -24,12 +24,22 @@ import org.springframework.web.cors.UrlBasedCorsConfigurationSource;
 @EnableConfigurationProperties(SecurityProperties.class)
 class SecurityConfig {
 
+    static final String WEBSOCKET_PATH = "/ws";
+
+    /** Shared by the HTTP filter chain and {@link JwtTokenAuthenticator}, so both map roles the same way. */
     @Bean
-    SecurityFilterChain securityFilterChain(
-            HttpSecurity http, SecurityProperties properties, SecurityProblemResponses problems) throws Exception {
+    JwtAuthenticationConverter jwtAuthenticationConverter() {
         JwtAuthenticationConverter tokens = new JwtAuthenticationConverter();
         tokens.setJwtGrantedAuthoritiesConverter(new KeycloakRealmRolesConverter());
+        return tokens;
+    }
 
+    @Bean
+    SecurityFilterChain securityFilterChain(
+            HttpSecurity http,
+            SecurityProperties properties,
+            SecurityProblemResponses problems,
+            JwtAuthenticationConverter tokens) throws Exception {
         return http
                 // Tokens travel in a header, not a cookie, so there is no CSRF exposure to protect against.
                 .csrf(AbstractHttpConfigurer::disable)
@@ -38,6 +48,9 @@ class SecurityConfig {
                 .authorizeHttpRequests(requests -> requests
                         .dispatcherTypeMatchers(DispatcherType.ERROR).permitAll()
                         .requestMatchers(properties.publicPaths().toArray(String[]::new)).permitAll()
+                        // Browsers cannot set headers on a WebSocket handshake. The token is
+                        // checked on the STOMP CONNECT frame instead (see TokenAuthenticator).
+                        .requestMatchers(WEBSOCKET_PATH).permitAll()
                         .requestMatchers("/actuator/**").hasRole("ADMIN")
                         .requestMatchers("/api/**").authenticated()
                         .anyRequest().denyAll())

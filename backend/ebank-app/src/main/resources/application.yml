@@ -36,6 +36,13 @@ spring:
     redis:
       timeout: 2s
 
+  # Fallback emails for offline users. The host is set per profile: no host, no email channel.
+  mail:
+    properties:
+      mail.smtp.connectiontimeout: 5000
+      mail.smtp.timeout: 5000
+      mail.smtp.writetimeout: 5000
+
 # Everything else under /api needs a token and all other paths are denied.
 # prometheus stays open because scrapers have no user token: keep port 8081 internal in qua and prod.
 ebank:
@@ -44,6 +51,20 @@ ebank:
       - /actuator/health/**
       - /actuator/info
       - /actuator/prometheus
+  # Transactional outbox, delivered in-process until a broker is added.
+  outbox:
+    relay-enabled: true
+    poll-interval-ms: 1000
+    batch-size: 50
+    max-attempts: 10
+    max-backoff: 15m
+    retention: 7d
+  notifications:
+    email:
+      from: "EBANK <noreply@ebank.local>"
+    keycloak:
+      realm: ebank
+      client-id: ebank-notifications
 
 # API docs
 springdoc:

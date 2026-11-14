@@ -29,7 +29,14 @@ import tools.jackson.databind.json.JsonMapper;
 /** Runs the real application on a real PostgreSQL and calls it over HTTP. Redis is not needed. */
 @SpringBootTest(
         webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT,
-        properties = {"spring.cache.type=none", "management.health.redis.enabled=false"})
+        properties = {
+            "spring.cache.type=none",
+            "management.health.redis.enabled=false",
+            "management.health.mail.enabled=false",
+            // No Keycloak in these tests: offline users get no email or SMS.
+            "ebank.notifications.keycloak.client-secret=",
+            "ebank.outbox.poll-interval-ms=100"
+        })
 @ActiveProfiles("dev")
 @Import(IntegrationTestBase.StubTokens.class)
 abstract class IntegrationTestBase {

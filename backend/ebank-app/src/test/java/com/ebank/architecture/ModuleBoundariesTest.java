@@ -34,7 +34,7 @@ class ModuleBoundariesTest {
 
     @Test
     void modulesOnlyUseTheAuthPublicApi() {
-        noClasses().that().resideInAnyPackage("com.ebank.accounts..", "com.ebank.transactions..")
+        noClasses().that().resideInAnyPackage("com.ebank.accounts..", "com.ebank.transactions..", "com.ebank.notifications..")
                 .should().dependOnClassesThat().resideInAPackage("com.ebank.auth.security..")
                 .check(CLASSES);
     }
@@ -43,7 +43,27 @@ class ModuleBoundariesTest {
     void commonDependsOnNoDomainModule() {
         noClasses().that().resideInAPackage("com.ebank.common..")
                 .should().dependOnClassesThat().resideInAnyPackage(
-                        "com.ebank.accounts..", "com.ebank.transactions..", "com.ebank.auth..")
+                        "com.ebank.accounts..", "com.ebank.transactions..", "com.ebank.auth..", "com.ebank.notifications..")
+                .check(CLASSES);
+    }
+
+    /** Notifications learn about transactions from their events only, never from their tables or services. */
+    @Test
+    void notificationsOnlyUsesTheTransactionsEvents() {
+        noClasses().that().resideInAPackage("com.ebank.notifications..")
+                .should().dependOnClassesThat().resideInAnyPackage(
+                        "com.ebank.transactions.application..",
+                        "com.ebank.transactions.domain..",
+                        "com.ebank.transactions.infrastructure..",
+                        "com.ebank.transactions.web..",
+                        "com.ebank.accounts..")
+                .check(CLASSES);
+    }
+
+    @Test
+    void sourceModulesDoNotDependOnNotifications() {
+        noClasses().that().resideInAnyPackage("com.ebank.accounts..", "com.ebank.transactions..")
+                .should().dependOnClassesThat().resideInAPackage("com.ebank.notifications..")
                 .check(CLASSES);
     }
 }

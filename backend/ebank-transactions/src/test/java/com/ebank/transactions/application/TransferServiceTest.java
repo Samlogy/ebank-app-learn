@@ -5,6 +5,7 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyCollection;
 import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.times;
@@ -16,6 +17,9 @@ import com.ebank.accounts.api.AccountsApi;
 import com.ebank.auth.api.CurrentUser;
 import com.ebank.common.error.ApiException;
 import com.ebank.common.money.Money;
+import com.ebank.common.outbox.Outbox;
+import com.ebank.transactions.api.TransactionCancelled;
+import com.ebank.transactions.api.TransactionCompleted;
 import com.ebank.transactions.domain.EntryType;
 import com.ebank.transactions.domain.LedgerEntry;
 import com.ebank.transactions.domain.Transfer;
@@ -40,6 +44,7 @@ class TransferServiceTest {
     @Mock LedgerEntryRepository ledger;
     @Mock AccountsApi accounts;
     @Mock CurrentUser currentUser;
+    @Mock Outbox outbox;
     private TransferService service;
 
     private static final AccountView ALICE = new AccountView("A", "alice", "EUR", true);
@@ -47,7 +52,7 @@ class TransferServiceTest {
 
     @BeforeEach
     void setUp() {
-        service = new TransferService(transfers, ledger, accounts, currentUser);
+        service = new TransferService(transfers, ledger, accounts, currentUser, outbox);
         lenient().when(currentUser.userId()).thenReturn("alice");
         lenient().doCallRealMethod().when(currentUser).requireAdmin();
         lenient().when(transfers.findByInitiatedByAndIdempotencyKey(any(), any())).thenReturn(Optional.empty());
@@ -83,6 +88,20 @@ class TransferServiceTest {
     }
 
     @Test
+    void completedTransferPublishesAnEventNamingBothOwners() {
+        when(ledger.balanceOf("A")).thenReturn(new BigDecimal("100"));
+
+        Transfer transfer = service.transfer(command("30")).transfer();
+
+        ArgumentCaptor<TransactionCompleted> event = ArgumentCaptor.forClass(TransactionCompleted.class);
+        verify(outbox).append(eq(TransactionCompleted.TYPE), eq(transfer.getTransactionId()), event.capture());
+        assertThat(event.getValue().senderUserId()).isEqualTo("alice");
+        assertThat(event.getValue().receiverUserId()).isEqualTo("bob");
+        assertThat(event.getValue().amount()).isEqualByComparingTo("30");
+        assertThat(event.getValue().isDeposit()).isFalse();
+    }
+
+    @Test
     void spendingTheExactBalanceIsAllowed() {
         when(ledger.balanceOf("A")).thenReturn(new BigDecimal("30.00"));
 
@@ -98,6 +117,10 @@ class TransferServiceTest {
         assertThat(transfer.getStatus()).isEqualTo(TransferStatus.CANCELLED);
         assertThat(transfer.getFailureReason()).isEqualTo("INSUFFICIENT_FUNDS");
         verify(ledger, never()).save(any());
+        ArgumentCaptor<TransactionCancelled> event = ArgumentCaptor.forClass(TransactionCancelled.class);
+        verify(outbox).append(eq(TransactionCancelled.TYPE), eq(transfer.getTransactionId()), event.capture());
+        assertThat(event.getValue().senderUserId()).isEqualTo("alice");
+        assertThat(event.getValue().reason()).isEqualTo("INSUFFICIENT_FUNDS");
     }
 
     @Test
@@ -129,6 +152,7 @@ class TransferServiceTest {
 
         assertThat(service.transfer(command("30")).replayed()).isTrue();
         verify(transfers, never()).saveAndFlush(any());
+        verify(outbox, never()).append(any(), any(), any());
     }
 
     @Test
@@ -175,5 +199,9 @@ class TransferServiceTest {
         assertThat(transfer.getStatus()).isEqualTo(TransferStatus.DONE);
         verify(ledger, times(2)).save(any());
         verify(ledger, never()).balanceOf(anyString());
+        ArgumentCaptor<TransactionCompleted> event = ArgumentCaptor.forClass(TransactionCompleted.class);
+        verify(outbox).append(eq(TransactionCompleted.TYPE), any(), event.capture());
+        assertThat(event.getValue().isDeposit()).isTrue();
+        assertThat(event.getValue().receiverUserId()).isEqualTo("bob");
     }
 }

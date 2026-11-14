@@ -100,6 +100,8 @@ services:
       # Tokens name localhost as their issuer, but this container fetches keys over the compose network.
       KEYCLOAK_ISSUER_URI: http://localhost:8180/realms/ebank
       KEYCLOAK_JWK_SET_URI: http://keycloak:8080/realms/ebank/protocol/openid-connect/certs
+      KEYCLOAK_URL: http://keycloak:8080    # Admin API, to read email and phone for offline notifications
+      MAIL_HOST: mailpit
     ports:
       - "127.0.0.1:8080:8080"
     depends_on:
@@ -109,6 +111,8 @@ services:
         condition: service_healthy
       keycloak:
         condition: service_healthy
+      mailpit:
+        condition: service_started
     healthcheck:
       test: ["CMD", "wget", "-qO-", "http://localhost:8080/actuator/health/readiness"]
       interval: 10s

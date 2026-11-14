@@ -15,10 +15,18 @@ spring:
       host: ${REDIS_HOST:localhost}
       port: ${REDIS_PORT:6379}
       password: ${REDIS_PASSWORD:}
+  mail:
+    host: ${MAIL_HOST:localhost}    # Mailpit: read the emails at http://localhost:8025
+    port: ${MAIL_PORT:1025}
 
 ebank:
   security:
     cors-allowed-origins: ${CORS_ALLOWED_ORIGINS:http://localhost:4200}
+  notifications:
+    keycloak:
+      server-url: ${KEYCLOAK_URL:http://localhost:8180}
+      # Matches the dev-only secret in infra/keycloak/realms. Never reuse it outside dev.
+      client-secret: ${KEYCLOAK_NOTIFICATIONS_CLIENT_SECRET:dev-notifications-secret}
     public-paths:
       - /actuator/**
       - /v3/api-docs/**
