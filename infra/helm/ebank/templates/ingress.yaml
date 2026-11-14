@@ -1,28 +1,40 @@
+{{- $tls := .Values.ingress.tls -}}
 # Traefik, which k3s ships with. WebSocket upgrades on /ws work without extra configuration.
 # /actuator is not routed: it is only reachable inside the cluster.
 apiVersion: networking.k8s.io/v1
 kind: Ingress
 metadata:
   name: ebank
+  labels:
+    {{- include "ebank.labels" (dict "root" $ "name" "ingress") | nindent 4 }}
   annotations:
+    {{- if $tls.enabled }}
     traefik.ingress.kubernetes.io/router.entrypoints: websecure
     traefik.ingress.kubernetes.io/router.tls: "true"
+    {{- with $tls.clusterIssuer }}
+    cert-manager.io/cluster-issuer: {{ . }}
+    {{- end }}
+    {{- else }}
+    traefik.ingress.kubernetes.io/router.entrypoints: web
+    {{- end }}
 spec:
-  ingressClassName: traefik
+  ingressClassName: {{ .Values.ingress.className }}
+  {{- if $tls.enabled }}
   tls:
-    - hosts: [app.ebank.example, api.ebank.example, auth.ebank.example]
-      secretName: ebank-tls
+    - hosts: [{{ .Values.hosts.app }}, {{ .Values.hosts.api }}, {{ .Values.hosts.auth }}]
+      secretName: {{ $tls.secretName }}
+  {{- end }}
   rules:
-    - host: app.ebank.example
+    - host: {{ .Values.hosts.app }}
       http:
         paths:
           - { path: /, pathType: Prefix, backend: { service: { name: front-web, port: { name: http } } } }
-    - host: api.ebank.example
+    - host: {{ .Values.hosts.api }}
       http:
         paths:
           - { path: /api, pathType: Prefix, backend: { service: { name: backend, port: { name: http } } } }
           - { path: /ws, pathType: Exact, backend: { service: { name: backend, port: { name: http } } } }
-    - host: auth.ebank.example
+    - host: {{ .Values.hosts.auth }}
       http:
         paths:
           - { path: /, pathType: Prefix, backend: { service: { name: keycloak, port: { name: http } } } }

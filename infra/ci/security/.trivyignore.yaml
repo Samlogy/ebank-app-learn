@@ -1,5 +1,6 @@
 # Accepted Trivy findings. Each entry says why; review them when the reason no longer holds.
-# Paths are relative to the scanned folder: infra/ for files, reports/k3s-rendered/ for manifests.
+# Paths are relative to the scanned folder: infra/ for files, reports/helm-rendered/ for the
+# rendered chart (<env>-<kind>-<name>.yaml).
 misconfigurations:
   - id: DS002
     paths: ["ci/jenkins/agent.Dockerfile"]

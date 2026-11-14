@@ -1,0 +1,11 @@
+apiVersion: v2
+name: ebank
+description: >-
+  EBANK on k3s: PostgreSQL, Redis, Keycloak, the Spring Boot backend, the Angular front end and a
+  Traefik ingress. Elasticsearch and Mailpit are included for dev only.
+type: application
+# Chart version: bump on every change to templates or default values.
+version: 0.1.0
+# Default image tag of the backend and front end when image.tag is not set.
+appVersion: "latest"
+keywords: [ebank, spring-boot, angular, keycloak, k3s]

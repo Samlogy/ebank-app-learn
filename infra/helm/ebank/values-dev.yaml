@@ -1,0 +1,49 @@
+# Local k3s: plain HTTP on *.ebank.localhost (browsers resolve it to 127.0.0.1), Keycloak in dev
+# mode with the versioned realm, Elasticsearch and Mailpit in the cluster.
+#   helm upgrade --install ebank infra/helm/ebank -n ebank-dev --create-namespace \
+#     -f infra/helm/ebank/values-dev.yaml \
+#     --set-file keycloak.realm=infra/keycloak/realms/ebank-realm.json
+
+hosts:
+  app: app.ebank.localhost
+  api: api.ebank.localhost
+  auth: auth.ebank.localhost
+
+ingress:
+  tls:
+    enabled: false
+
+# Dev-only values, like the docker compose defaults. Never reuse them in qua or prod.
+secrets:
+  create: true
+  postgres:
+    POSTGRES_USER: ebank
+    POSTGRES_PASSWORD: ebank
+    KEYCLOAK_DB_PASSWORD: keycloak
+  keycloak:
+    ADMIN_USERNAME: admin
+    ADMIN_PASSWORD: admin
+  backend:
+    DB_USERNAME: ebank
+    DB_PASSWORD: ebank
+    REDIS_PASSWORD: dev-redis
+    KEYCLOAK_NOTIFICATIONS_CLIENT_SECRET: dev-notifications-secret
+    ANTHROPIC_API_KEY: ""
+
+backend:
+  actuatorPort: http
+  config:
+    SPRING_PROFILES_ACTIVE: dev
+    ELASTICSEARCH_URIS: http://elasticsearch:9200
+    MAIL_HOST: mailpit
+    MAIL_PORT: "1025"
+    OTLP_TRACES_ENABLED: "false"
+  resources:
+    requests: { cpu: 250m, memory: 512Mi }
+    limits: { memory: 1Gi }
+
+keycloak:
+  devMode: true
+
+devServices:
+  enabled: true

@@ -1,0 +1,95 @@
+{{- $scheme := include "ebank.scheme" . -}}
+{{- $derived := dict
+      "KEYCLOAK_ISSUER_URI" (printf "%s://%s/realms/ebank" $scheme .Values.hosts.auth)
+      "KEYCLOAK_PUBLIC_URL" (printf "%s://%s" $scheme .Values.hosts.auth)
+      "CORS_ALLOWED_ORIGINS" (printf "%s://%s" $scheme .Values.hosts.app) -}}
+{{- $config := merge (deepCopy .Values.backend.config) $derived -}}
+{{- $actuatorPort := ternary "8081" "8080" (eq .Values.backend.actuatorPort "management") -}}
+# Non-secret settings. Secrets live in the ebank-backend-secrets Secret.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: ebank-backend-config
+  labels:
+    {{- include "ebank.labels" (dict "root" $ "name" "backend") | nindent 4 }}
+data:
+  {{- range $key, $value := $config }}
+  {{ $key }}: {{ $value | toString | quote }}
+  {{- end }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: backend
+  labels:
+    {{- include "ebank.labels" (dict "root" $ "name" "backend") | nindent 4 }}
+spec:
+  selector:
+    {{- include "ebank.selector" "backend" | nindent 4 }}
+  ports:
+    - { name: http, port: 8080, targetPort: http }
+    - { name: management, port: 8081, targetPort: management }
+---
+# {{ .Values.backend.replicas }} replica(s): see backend.replicas in values.yaml before scaling out.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: backend
+  labels:
+    {{- include "ebank.labels" (dict "root" $ "name" "backend") | nindent 4 }}
+spec:
+  replicas: {{ .Values.backend.replicas }}
+  strategy:
+    type: RollingUpdate
+    rollingUpdate: { maxSurge: 1, maxUnavailable: 0 }
+  selector:
+    matchLabels:
+      {{- include "ebank.selector" "backend" | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "ebank.labels" (dict "root" $ "name" "backend") | nindent 8 }}
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: {{ $actuatorPort | quote }}
+        prometheus.io/path: /actuator/prometheus
+        # Restart the pods when the config (or, in dev, the secrets) change.
+        checksum/config: {{ $config | toJson | sha256sum }}
+        {{- if .Values.secrets.create }}
+        checksum/secret: {{ .Values.secrets.backend | toJson | sha256sum }}
+        {{- end }}
+    spec:
+      terminationGracePeriodSeconds: 40
+      {{- include "ebank.podSecurity" (dict "user" 10001 "group" 10001) | nindent 6 }}
+      containers:
+        - name: backend
+          image: {{ include "ebank.image" (dict "root" $ "image" .Values.backend.image) }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          envFrom:
+            - configMapRef: { name: ebank-backend-config }
+            - secretRef: { name: ebank-backend-secrets }
+          ports:
+            - { name: http, containerPort: 8080 }
+            - { name: management, containerPort: 8081 }   # actuator in qua/prod, never routed by the ingress
+          startupProbe:
+            httpGet: { path: /actuator/health/liveness, port: {{ .Values.backend.actuatorPort }} }
+            periodSeconds: 5
+            failureThreshold: 36
+          livenessProbe:
+            httpGet: { path: /actuator/health/liveness, port: {{ .Values.backend.actuatorPort }} }
+            periodSeconds: 10
+          readinessProbe:
+            httpGet: { path: /actuator/health/readiness, port: {{ .Values.backend.actuatorPort }} }
+            periodSeconds: 5
+          lifecycle:
+            # Gives the ingress time to stop routing here before Spring starts its graceful shutdown.
+            preStop:
+              sleep: { seconds: 5 }
+          resources:
+            {{- toYaml .Values.backend.resources | nindent 12 }}
+          {{- include "ebank.containerSecurity" (dict "readOnly" true) | nindent 10 }}
+          volumeMounts:
+            - { name: tmp, mountPath: /tmp }
+      volumes:
+        - name: tmp
+          emptyDir: {}

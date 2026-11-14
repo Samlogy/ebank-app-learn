@@ -1,27 +1,45 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: keycloak
+  labels:
+    {{- include "ebank.labels" (dict "root" $ "name" "keycloak") | nindent 4 }}
+spec:
+  selector:
+    {{- include "ebank.selector" "keycloak" | nindent 4 }}
+  ports:
+    - { name: http, port: 8080, targetPort: http }
+---
 # Keycloak behind the ingress: TLS ends at Traefik, Keycloak trusts its X-Forwarded headers.
 apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: keycloak
-  labels: { app.kubernetes.io/name: keycloak }
+  labels:
+    {{- include "ebank.labels" (dict "root" $ "name" "keycloak") | nindent 4 }}
 spec:
   replicas: 1
   selector:
-    matchLabels: { app.kubernetes.io/name: keycloak }
+    matchLabels:
+      {{- include "ebank.selector" "keycloak" | nindent 6 }}
   template:
     metadata:
-      labels: { app.kubernetes.io/name: keycloak }
+      labels:
+        {{- include "ebank.labels" (dict "root" $ "name" "keycloak") | nindent 8 }}
+      {{- if .Values.secrets.create }}
+      annotations:
+        checksum/secret: {{ pick .Values.secrets "postgres" "keycloak" | toJson | sha256sum }}
+      {{- end }}
     spec:
-      # No Docker-link variables: a Service named "redis" would set REDIS_PORT=tcp://..., which Spring reads.
-      enableServiceLinks: false
-      securityContext:
-        runAsNonRoot: true
-        runAsUser: 1000
-        seccompProfile: { type: RuntimeDefault }
+      {{- include "ebank.podSecurity" (dict "user" 1000) | nindent 6 }}
       containers:
         - name: keycloak
-          image: keycloak/keycloak:26.8.2
-          args: ["start"]
+          image: {{ .Values.keycloak.image }}
+          {{- if .Values.keycloak.devMode }}
+          args: ["start-dev"{{ if .Values.keycloak.realm }}, "--import-realm"{{ end }}]
+          {{- else }}
+          args: ["start"{{ if .Values.keycloak.realm }}, "--import-realm"{{ end }}]
+          {{- end }}
           env:
             - { name: KC_DB, value: postgres }
             - { name: KC_DB_URL, value: "jdbc:postgresql://postgres:5432/keycloak" }
@@ -53,8 +71,15 @@ spec:
             httpGet: { path: /health/live, port: management }
             periodSeconds: 20
           resources:
-            requests: { cpu: 250m, memory: 512Mi }
-            limits: { memory: 1Gi }
-          securityContext:
-            allowPrivilegeEscalation: false
-            capabilities: { drop: ["ALL"] }
+            {{- toYaml .Values.keycloak.resources | nindent 12 }}
+          # Writable root: "start" builds the optimized server into its installation directory.
+          {{- include "ebank.containerSecurity" (dict "readOnly" false) | nindent 10 }}
+          {{- if .Values.keycloak.realm }}
+          volumeMounts:
+            - { name: realm, mountPath: /opt/keycloak/data/import, readOnly: true }
+          {{- end }}
+      {{- if .Values.keycloak.realm }}
+      volumes:
+        - name: realm
+          secret: { secretName: ebank-realm }
+      {{- end }}

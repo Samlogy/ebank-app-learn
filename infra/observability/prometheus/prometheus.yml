@@ -1,4 +1,4 @@
-# Local Prometheus. In k3s the same jobs come from pod annotations (see infra/k3s).
+# Local Prometheus. In k3s the same jobs come from pod annotations (see infra/helm/ebank).
 global:
   scrape_interval: 15s
   evaluation_interval: 15s

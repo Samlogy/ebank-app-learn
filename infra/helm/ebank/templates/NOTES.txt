@@ -1,0 +1,17 @@
+EBANK {{ .Chart.Version }} installed in namespace {{ .Release.Namespace }} (images: {{ .Values.image.tag | default .Chart.AppVersion }}).
+
+  Front end : {{ include "ebank.scheme" . }}://{{ .Values.hosts.app }}
+  API       : {{ include "ebank.scheme" . }}://{{ .Values.hosts.api }}/api/v1
+  Keycloak  : {{ include "ebank.scheme" . }}://{{ .Values.hosts.auth }}
+{{- if not .Values.secrets.create }}
+
+The ebank-postgres, ebank-keycloak and ebank-backend-secrets Secrets must already exist in
+{{ .Release.Namespace }}: pods stay in CreateContainerConfigError until they do.
+{{- end }}
+{{- if and .Values.keycloak.devMode (not .Values.keycloak.realm) }}
+
+No realm was passed: add --set-file keycloak.realm=infra/keycloak/realms/ebank-realm.json to import it.
+{{- end }}
+
+Watch the rollout:
+  kubectl -n {{ .Release.Namespace }} rollout status deployment/backend

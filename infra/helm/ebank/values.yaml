@@ -1,0 +1,124 @@
+# Default values: a production-like setup with TLS and every secret created outside the chart.
+# Each environment overrides what differs in values-<env>.yaml:
+#   helm upgrade --install ebank infra/helm/ebank -n ebank-<env> --create-namespace -f infra/helm/ebank/values-<env>.yaml
+#
+# Resource names are fixed (backend, postgres, keycloak...) because the backend config refers to
+# them as host names. Install one release per namespace.
+
+# The EBANK images. CI sets image.tag to the git commit; empty means the chart's appVersion.
+image:
+  registry: docker.io/ebank
+  tag: ""
+  pullPolicy: IfNotPresent
+
+# Public host names. The issuer, CORS origin and Keycloak hostname are derived from them,
+# with https when ingress.tls.enabled is true, http otherwise.
+hosts:
+  app: app.ebank.example
+  api: api.ebank.example
+  auth: auth.ebank.example
+
+# Traefik, which k3s ships with. WebSocket upgrades on /ws work without extra configuration.
+# /actuator is never routed: it is only reachable inside the cluster.
+ingress:
+  className: traefik
+  tls:
+    enabled: true
+    secretName: ebank-tls
+    # cert-manager ClusterIssuer (installed separately). Empty: bring your own ebank-tls Secret.
+    clusterIssuer: ""
+
+# Secrets. With create: false (qua, prod) they must exist before the install, never from git:
+#   kubectl -n <ns> create secret generic ebank-backend-secrets --from-env-file=backend.env
+#   kubectl -n <ns> create secret generic ebank-postgres --from-env-file=postgres.env   # POSTGRES_USER, POSTGRES_PASSWORD, KEYCLOAK_DB_PASSWORD
+#   kubectl -n <ns> create secret generic ebank-keycloak --from-env-file=keycloak.env   # ADMIN_USERNAME, ADMIN_PASSWORD
+# With create: true (dev only) the chart creates them from the maps below.
+secrets:
+  create: false
+  postgres: {}
+  keycloak: {}
+  backend: {}
+
+backend:
+  # One replica on purpose: the STOMP broker, user presence and the assistant's per-conversation
+  # locks are in memory. Several replicas need a broker relay (RabbitMQ STOMP) and sticky sessions first.
+  replicas: 1
+  image: ebank-backend
+  # Port used by the probes and the Prometheus annotation. qua and prod serve actuator on
+  # "management" (8081); the dev profile has no separate management port, so dev uses "http".
+  actuatorPort: management
+  # Non-secret settings, merged with the derived KEYCLOAK_ISSUER_URI, KEYCLOAK_PUBLIC_URL and
+  # CORS_ALLOWED_ORIGINS. Secrets live in the ebank-backend-secrets Secret.
+  config:
+    SPRING_PROFILES_ACTIVE: prod
+    DB_URL: jdbc:postgresql://postgres:5432/ebank
+    REDIS_HOST: redis
+    REDIS_SSL_ENABLED: "false"          # in-cluster Redis; set true for a managed one
+    # Tokens carry the public issuer; keys are fetched inside the cluster.
+    KEYCLOAK_JWK_SET_URI: http://keycloak:8080/realms/ebank/protocol/openid-connect/certs
+    KEYCLOAK_URL: http://keycloak:8080
+    OTLP_TRACES_ENDPOINT: http://otel-collector.monitoring:4318/v1/traces
+    ELASTICSEARCH_URIS: https://elasticsearch.example:9200
+    MAIL_HOST: smtp.example
+    MAIL_PORT: "587"
+    MAIL_FROM: "EBANK <noreply@ebank.example>"
+  resources:
+    requests: { cpu: 500m, memory: 768Mi }
+    limits: { memory: 1Gi }
+
+frontWeb:
+  replicas: 2
+  image: ebank-front-web
+  resources:
+    requests: { cpu: 20m, memory: 32Mi }
+    limits: { memory: 128Mi }
+
+keycloak:
+  image: keycloak/keycloak:26.8.2
+  # true: "start-dev". false: "start" (production mode, behind the TLS ingress).
+  devMode: false
+  # Realm export imported on first start. Helm cannot read files outside the chart, so pass it with
+  #   --set-file keycloak.realm=infra/keycloak/realms/ebank-realm.json
+  # Stored in a Secret, not a ConfigMap: the export contains a client secret.
+  realm: ""
+  resources:
+    requests: { cpu: 250m, memory: 512Mi }
+    limits: { memory: 1Gi }
+
+# One PostgreSQL for the app (database "ebank") and Keycloak (database "keycloak").
+postgres:
+  image: postgres:18.6-alpine
+  storage: 5Gi
+  storageClassName: ""                  # empty: the cluster default (local-path in k3s)
+  resources:
+    requests: { cpu: 100m, memory: 256Mi }
+    limits: { memory: 1Gi }
+
+# Cache and rate limits. Nothing in Redis has to survive a restart, so there is no volume.
+redis:
+  image: redis:8.8.4-alpine
+  resources:
+    requests: { cpu: 50m, memory: 64Mi }
+    limits: { memory: 256Mi }
+
+# Elasticsearch and Mailpit inside the cluster, for dev only. qua and prod use managed services.
+devServices:
+  enabled: false
+  elasticsearch:
+    image: docker.elastic.co/elasticsearch/elasticsearch:9.4.8
+    storage: 5Gi
+    resources:
+      requests: { cpu: 250m, memory: 1Gi }
+      limits: { memory: 1536Mi }
+  mailpit:
+    image: axllent/mailpit:v1.33.1
+    resources:
+      requests: { cpu: 10m, memory: 32Mi }
+      limits: { memory: 128Mi }
+
+networkPolicy:
+  enabled: true
+  # API traffic (8080) only from the ingress controller's namespace (Traefik in k3s).
+  ingressNamespace: kube-system
+  # Actuator (8081) only from the monitoring namespace.
+  monitoringNamespace: monitoring

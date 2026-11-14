@@ -1,28 +1,52 @@
-# One PostgreSQL for the app (database "ebank") and Keycloak (database "keycloak").
+# Runs once, on an empty data volume.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: postgres-init
+  labels:
+    {{- include "ebank.labels" (dict "root" $ "name" "postgres") | nindent 4 }}
+data:
+  10-keycloak.sh: |
+    #!/bin/sh
+    set -eu
+    psql -v ON_ERROR_STOP=1 -U "$POSTGRES_USER" -d ebank <<SQL
+    CREATE USER keycloak WITH PASSWORD '$KEYCLOAK_DB_PASSWORD';
+    CREATE DATABASE keycloak OWNER keycloak;
+    SQL
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: postgres
+  labels:
+    {{- include "ebank.labels" (dict "root" $ "name" "postgres") | nindent 4 }}
+spec:
+  selector:
+    {{- include "ebank.selector" "postgres" | nindent 4 }}
+  ports:
+    - { name: postgres, port: 5432, targetPort: postgres }
+---
 apiVersion: apps/v1
 kind: StatefulSet
 metadata:
   name: postgres
-  labels: { app.kubernetes.io/name: postgres }
+  labels:
+    {{- include "ebank.labels" (dict "root" $ "name" "postgres") | nindent 4 }}
 spec:
   serviceName: postgres
   replicas: 1
   selector:
-    matchLabels: { app.kubernetes.io/name: postgres }
+    matchLabels:
+      {{- include "ebank.selector" "postgres" | nindent 6 }}
   template:
     metadata:
-      labels: { app.kubernetes.io/name: postgres }
+      labels:
+        {{- include "ebank.labels" (dict "root" $ "name" "postgres") | nindent 8 }}
     spec:
-      # No Docker-link variables: a Service named "redis" would set REDIS_PORT=tcp://..., which Spring reads.
-      enableServiceLinks: false
-      securityContext:
-        runAsNonRoot: true
-        runAsUser: 70        # postgres in the alpine image
-        fsGroup: 70
-        seccompProfile: { type: RuntimeDefault }
+      {{- include "ebank.podSecurity" (dict "user" 70 "fsGroup" 70) | nindent 6 }}
       containers:
         - name: postgres
-          image: postgres:18.6-alpine
+          image: {{ .Values.postgres.image }}
           ports:
             - { name: postgres, containerPort: 5432 }
           env:
@@ -47,12 +71,9 @@ spec:
             initialDelaySeconds: 30
             periodSeconds: 10
           resources:
-            requests: { cpu: 100m, memory: 256Mi }
-            limits: { memory: 1Gi }
-          securityContext:
-            allowPrivilegeEscalation: false
-            readOnlyRootFilesystem: true     # writes only to the data volume, /tmp and the socket directory
-            capabilities: { drop: ["ALL"] }
+            {{- toYaml .Values.postgres.resources | nindent 12 }}
+          # Read-only root: writes only to the data volume, /tmp and the socket directory.
+          {{- include "ebank.containerSecurity" (dict "readOnly" true) | nindent 10 }}
       volumes:
         - name: init
           configMap: { name: postgres-init }
@@ -65,5 +86,8 @@ spec:
         name: data
       spec:
         accessModes: ["ReadWriteOnce"]
+        {{- with .Values.postgres.storageClassName }}
+        storageClassName: {{ . }}
+        {{- end }}
         resources:
-          requests: { storage: 5Gi }
+          requests: { storage: {{ .Values.postgres.storage }} }

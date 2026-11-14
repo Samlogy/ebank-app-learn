@@ -1,0 +1,25 @@
+# prod: create the three secrets first (see values.yaml, "secrets"), then
+#   helm upgrade --install ebank infra/helm/ebank -n ebank-prod --create-namespace \
+#     -f infra/helm/ebank/values-prod.yaml --set image.tag=<git sha>
+
+hosts:
+  app: app.ebank.example
+  api: api.ebank.example
+  auth: auth.ebank.example
+
+ingress:
+  tls:
+    clusterIssuer: letsencrypt-prod
+
+backend:
+  config:
+    SPRING_PROFILES_ACTIVE: prod
+    MAIL_FROM: "EBANK <noreply@ebank.example>"
+  resources:
+    requests: { cpu: "1", memory: 1536Mi }
+    limits: { memory: 2Gi }
+
+postgres:
+  resources:
+    requests: { cpu: 500m, memory: 1Gi }
+    limits: { memory: 4Gi }

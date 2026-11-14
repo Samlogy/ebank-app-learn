@@ -1,0 +1,49 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: front-web
+  labels:
+    {{- include "ebank.labels" (dict "root" $ "name" "front-web") | nindent 4 }}
+spec:
+  selector:
+    {{- include "ebank.selector" "front-web" | nindent 4 }}
+  ports:
+    - { name: http, port: 8080, targetPort: http }
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: front-web
+  labels:
+    {{- include "ebank.labels" (dict "root" $ "name" "front-web") | nindent 4 }}
+spec:
+  replicas: {{ .Values.frontWeb.replicas }}
+  selector:
+    matchLabels:
+      {{- include "ebank.selector" "front-web" | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "ebank.labels" (dict "root" $ "name" "front-web") | nindent 8 }}
+    spec:
+      {{- include "ebank.podSecurity" (dict "user" 101) | nindent 6 }}
+      containers:
+        - name: front-web
+          image: {{ include "ebank.image" (dict "root" $ "image" .Values.frontWeb.image) }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          ports:
+            - { name: http, containerPort: 8080 }
+          readinessProbe:
+            httpGet: { path: /healthz, port: http }
+            periodSeconds: 5
+          livenessProbe:
+            httpGet: { path: /healthz, port: http }
+            periodSeconds: 20
+          resources:
+            {{- toYaml .Values.frontWeb.resources | nindent 12 }}
+          {{- include "ebank.containerSecurity" (dict "readOnly" true) | nindent 10 }}
+          volumeMounts:
+            - { name: tmp, mountPath: /tmp }
+      volumes:
+        - name: tmp
+          emptyDir: {}

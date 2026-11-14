@@ -1,0 +1,105 @@
+{{- /* Elasticsearch and Mailpit inside the cluster, for dev only. qua and prod use managed services. */ -}}
+{{- if .Values.devServices.enabled }}
+{{- $es := .Values.devServices.elasticsearch }}
+{{- $mail := .Values.devServices.mailpit }}
+apiVersion: v1
+kind: Service
+metadata:
+  name: elasticsearch
+  labels:
+    {{- include "ebank.labels" (dict "root" $ "name" "elasticsearch") | nindent 4 }}
+spec:
+  selector:
+    {{- include "ebank.selector" "elasticsearch" | nindent 4 }}
+  ports:
+    - { name: http, port: 9200, targetPort: http }
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: elasticsearch
+  labels:
+    {{- include "ebank.labels" (dict "root" $ "name" "elasticsearch") | nindent 4 }}
+spec:
+  serviceName: elasticsearch
+  replicas: 1
+  selector:
+    matchLabels:
+      {{- include "ebank.selector" "elasticsearch" | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "ebank.labels" (dict "root" $ "name" "elasticsearch") | nindent 8 }}
+    spec:
+      {{- include "ebank.podSecurity" (dict "user" 1000 "fsGroup" 1000) | nindent 6 }}
+      containers:
+        - name: elasticsearch
+          image: {{ $es.image }}
+          env:
+            - { name: discovery.type, value: single-node }
+            - { name: xpack.security.enabled, value: "false" }   # dev only
+            - { name: ES_JAVA_OPTS, value: "-Xms512m -Xmx512m" }
+          ports:
+            - { name: http, containerPort: 9200 }
+          readinessProbe:
+            httpGet: { path: "/_cluster/health?wait_for_status=yellow&timeout=2s", port: http }
+            periodSeconds: 10
+          resources:
+            {{- toYaml $es.resources | nindent 12 }}
+          # Writable root: Elasticsearch writes its keystore under its config directory.
+          {{- include "ebank.containerSecurity" (dict "readOnly" false) | nindent 10 }}
+          volumeMounts:
+            - { name: data, mountPath: /usr/share/elasticsearch/data }
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        resources:
+          requests: { storage: {{ $es.storage }} }
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: mailpit
+  labels:
+    {{- include "ebank.labels" (dict "root" $ "name" "mailpit") | nindent 4 }}
+spec:
+  selector:
+    {{- include "ebank.selector" "mailpit" | nindent 4 }}
+  ports:
+    - { name: smtp, port: 1025, targetPort: smtp }
+    - { name: http, port: 8025, targetPort: http }
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: mailpit
+  labels:
+    {{- include "ebank.labels" (dict "root" $ "name" "mailpit") | nindent 4 }}
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      {{- include "ebank.selector" "mailpit" | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "ebank.labels" (dict "root" $ "name" "mailpit") | nindent 8 }}
+    spec:
+      {{- include "ebank.podSecurity" (dict "user" 1000) | nindent 6 }}
+      containers:
+        - name: mailpit
+          image: {{ $mail.image }}
+          ports:
+            - { name: smtp, containerPort: 1025 }
+            - { name: http, containerPort: 8025 }
+          resources:
+            {{- toYaml $mail.resources | nindent 12 }}
+          {{- include "ebank.containerSecurity" (dict "readOnly" true) | nindent 10 }}
+          volumeMounts:
+            - { name: tmp, mountPath: /tmp }    # its message database
+      volumes:
+        - name: tmp
+          emptyDir: {}
+{{- end }}

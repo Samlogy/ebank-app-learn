@@ -1,0 +1,13 @@
+# qua: create the three secrets first (see values.yaml, "secrets"), then
+#   helm upgrade --install ebank infra/helm/ebank -n ebank-qua --create-namespace \
+#     -f infra/helm/ebank/values-qua.yaml --set image.tag=<git sha>
+
+hosts:
+  app: app.qua.ebank.example
+  api: api.qua.ebank.example
+  auth: auth.qua.ebank.example
+
+backend:
+  config:
+    SPRING_PROFILES_ACTIVE: qua
+    MAIL_FROM: "EBANK <noreply@qua.ebank.example>"

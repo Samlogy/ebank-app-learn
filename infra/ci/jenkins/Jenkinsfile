@@ -152,13 +152,15 @@ pipeline {
             when { branch 'master' }
             steps {
                 withCredentials([file(credentialsId: 'kubeconfig-dev', variable: 'KUBECONFIG')]) {
+                    // --wait: fails the stage if the pods are not ready in time (same as rollout status).
                     sh '''
-                        kubectl kustomize --load-restrictor LoadRestrictionsNone infra/k3s/overlays/dev \
-                          | sed -e "s#docker.io/ebank/ebank-backend:latest#$REGISTRY/ebank-backend:$IMAGE_TAG#" \
-                                -e "s#docker.io/ebank/ebank-front-web:latest#$REGISTRY/ebank-front-web:$IMAGE_TAG#" \
-                          | kubectl apply -f -
-                        kubectl -n ebank-dev rollout status deployment/backend --timeout=5m
-                        kubectl -n ebank-dev rollout status deployment/front-web --timeout=3m
+                        helm upgrade --install ebank infra/helm/ebank \
+                          --namespace ebank-dev --create-namespace \
+                          -f infra/helm/ebank/values-dev.yaml \
+                          --set-file keycloak.realm=infra/keycloak/realms/ebank-realm.json \
+                          --set image.registry="$REGISTRY" --set image.tag="$IMAGE_TAG" \
+                          --wait --timeout 10m
+                        helm -n ebank-dev history ebank --max 5
                     '''
                 }
             }

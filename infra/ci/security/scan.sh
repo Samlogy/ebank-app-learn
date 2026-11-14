@@ -4,7 +4,7 @@
 #   infra/ci/security/scan.sh secrets          gitleaks over the git history
 #   infra/ci/security/scan.sh sast             Semgrep: community Java/TypeScript rules + ebank rules
 #   infra/ci/security/scan.sh deps             Trivy on dependencies (the SBOMs when the build made them)
-#   infra/ci/security/scan.sh iac              Trivy on Dockerfiles, compose and k3s manifests
+#   infra/ci/security/scan.sh iac              helm lint, then Trivy on Dockerfiles, compose and the rendered Helm chart
 #   infra/ci/security/scan.sh image <image>    Trivy on a built image
 #   infra/ci/security/scan.sh dast <url>       OWASP ZAP baseline against a running deployment
 #   infra/ci/security/scan.sh all              everything except image and dast
@@ -70,14 +70,19 @@ deps() {
 
 iac() {
   section "Infrastructure as code (Trivy)"
-  local rendered="$REPORTS/k3s-rendered"
+  local rendered="$REPORTS/helm-rendered"
+  local chart=infra/helm/ebank
   rm -rf "$rendered" && mkdir -p "$rendered"
-  # Scan what is actually applied: the rendered overlays, one file per resource so an accepted
-  # finding can be scoped to one workload in .trivyignore.yaml. Patch fragments alone would be
-  # flagged for settings that the base provides.
+  # Scan what is actually applied: the chart rendered with each environment's values, one file per
+  # resource so an accepted finding can be scoped to one workload in .trivyignore.yaml. The
+  # templates alone would not parse as Kubernetes YAML.
   for env in dev qua prod; do
-    docker run --rm "${USER_FLAGS[@]}" -v "$ROOT:$ROOT" -w "$ROOT" registry.k8s.io/kubectl:v1.34.1 \
-      kustomize --load-restrictor LoadRestrictionsNone "infra/k3s/overlays/$env" \
+    local values=(-f "$chart/values-$env.yaml")
+    [[ "$env" == dev ]] && values+=(--set-file keycloak.realm=infra/keycloak/realms/ebank-realm.json)
+    docker run --rm "${USER_FLAGS[@]}" -v "$ROOT:$ROOT" -w "$ROOT" alpine/helm:3.19.0 \
+      lint --strict "$chart" "${values[@]}"
+    docker run --rm "${USER_FLAGS[@]}" -v "$ROOT:$ROOT" -w "$ROOT" alpine/helm:3.19.0 \
+      template ebank "$chart" --namespace "ebank-$env" "${values[@]}" \
       | awk -v dir="$rendered" -v env="$env" '
           function flush() { if (doc != "") { file = dir "/" env "-" tolower(kind) "-" name ".yaml"; printf "%s", doc > file; close(file) } doc = ""; kind = ""; name = "" }
           /^---$/ { flush(); next }
@@ -89,9 +94,10 @@ iac() {
   done
   local report=(--severity HIGH,CRITICAL --ignorefile "$HERE/.trivyignore.yaml")
   local common=("${report[@]}" --exit-code 1)
-  trivy config "${report[@]}" --skip-dirs infra/k3s --format sarif --output "$REPORTS/trivy-iac.sarif" "$ROOT/infra"
-  trivy config "${report[@]}" --format sarif --output "$REPORTS/trivy-k3s.sarif" "$rendered"
-  trivy config "${common[@]}" --skip-dirs infra/k3s "$ROOT/infra"
+  # The chart is scanned rendered (above), so its folder is skipped in the plain file scan.
+  trivy config "${report[@]}" --skip-dirs infra/helm --format sarif --output "$REPORTS/trivy-iac.sarif" "$ROOT/infra"
+  trivy config "${report[@]}" --format sarif --output "$REPORTS/trivy-helm.sarif" "$rendered"
+  trivy config "${common[@]}" --skip-dirs infra/helm "$ROOT/infra"
   trivy config "${common[@]}" "$rendered"
 }
 
