@@ -29,12 +29,13 @@ This README describes how the project works today. For the design rationale and 
 |---|---|
 | `ebank-common`, `ebank-auth`, `ebank-accounts`, `ebank-transactions` | Implemented and tested |
 | `ebank-notifications` | Implemented and tested: stored notifications, REST API, live push over WebSocket/STOMP, email fallback for offline users |
-| Transactional outbox | Implemented in `ebank-common`, delivered by an in-process relay (no broker yet) |
+| `ebank-analytics` | Implemented and tested: transaction events projected into Elasticsearch, per-user summary, timeline and counterparties, admin overview |
+| Transactional outbox | Implemented in `ebank-common`, delivered by an in-process relay (no broker yet). Each handler succeeds or fails on its own. |
 | Front end: sign-in, accounts, transactions, profile, theming | Implemented against the real API |
 | Front end: notifications | Works, but still derived in the browser from recent transfers: not yet switched to the new API |
 | Front end: chatbot | UI only, uses a simulated transport (`DemoChatTransport`) |
-| Front end: analytics | Placeholder page |
-| `ebank-analytics`, `ebank-chatbot` | Empty modules (folder structure only) |
+| Front end: analytics | Placeholder page: not yet connected to the new API |
+| `ebank-chatbot` | Empty module (folder structure only) |
 | Message broker (Kafka or RabbitMQ), SMS provider | Not implemented. SMS is a logging stub. |
 | Redis | Configured as the Spring cache, but no code uses the cache yet |
 | `infra/k3s`, `infra/ci`, `infra/observability` | Empty placeholders |
@@ -97,6 +98,9 @@ flowchart TD
     Notifications -->|events in transactions.api only| Transactions
     Notifications --> Auth
     Notifications --> Common
+    Analytics -->|events in transactions.api only| Transactions
+    Analytics --> Auth
+    Analytics --> Common
     Accounts --> Auth
     Accounts --> Common
     Auth --> Common
@@ -112,6 +116,7 @@ Modules only talk through public APIs, never through each other's classes or tab
 - `common` must not depend on `accounts`, `transactions`, `auth` or `notifications`.
 - `notifications` may only use the event records in `com.ebank.transactions.api`, and nothing from `accounts`.
 - `accounts` and `transactions` must not depend on `notifications`: they publish events and don't know who listens.
+- `analytics` may only use the event records in `com.ebank.transactions.api`, nothing from `accounts` or `notifications`, and no module depends on `analytics`.
 
 The public APIs are:
 
@@ -137,7 +142,7 @@ Domain modules use the same package layout: `api` (public), `application`, `doma
 │   ├── ebank-accounts/       Accounts, lifecycle, modification history
 │   ├── ebank-transactions/   Transfers, deposits, ledger, balances, search
 │   ├── ebank-notifications/  Notifications, preferences, WebSocket push, email/SMS fallback
-│   ├── ebank-analytics/      Empty, planned
+│   ├── ebank-analytics/      Transaction facts in Elasticsearch, summaries and timelines
 │   └── ebank-chatbot/        Empty, planned
 ├── front-web/                Angular application
 ├── infra/
@@ -179,6 +184,7 @@ docker compose up -d --wait
 | Mailpit (test inbox) | http://localhost:8025 | None | Always |
 | PostgreSQL | `localhost:5432`, database `ebank` | `ebank` / `ebank` | Always |
 | Redis | `localhost:6379` | None | Always |
+| Elasticsearch (analytics) | http://localhost:9200 | None, security off in dev | Always |
 
 These defaults are for local containers only. To override them, create `infra/compose/.env`, which git ignores.
 
@@ -263,6 +269,8 @@ Shared settings are in [application.yml](backend/ebank-app/src/main/resources/ap
 | `MAIL_FROM` | Yes | `EBANK <noreply@ebank.local>` | Sender of fallback emails |
 | `KEYCLOAK_URL` | Yes | `http://localhost:8180` | Keycloak base URL for the Admin API (email and phone lookup) |
 | `KEYCLOAK_NOTIFICATIONS_CLIENT_SECRET` | Yes | `dev-notifications-secret` | Secret of the `ebank-notifications` service account. Empty turns email/SMS fallback off. |
+| `ELASTICSEARCH_URIS` | Yes | `http://localhost:9200` | Analytics store |
+| `ELASTICSEARCH_USERNAME` / `ELASTICSEARCH_PASSWORD` | Yes | Not used | Elasticsearch credentials |
 
 Two issuer settings are needed because browsers and containers reach Keycloak at different addresses. Tokens always name `http://localhost:8180` as their issuer, while the backend container fetches keys from `http://keycloak:8080`.
 
@@ -453,6 +461,21 @@ Types: `TRANSFER_RECEIVED`, `TRANSFER_SENT`, `TRANSFER_INTERNAL` (between two of
 
 **Flow.** `transactions` writes `TransactionCompleted` or `TransactionCancelled` to `outbox_event` in the transfer's own transaction. The relay delivers each event to `notifications` in a new transaction. If the user is subscribed, the notification is pushed after commit. If not, a `notifications.FallbackRequested` event is written to the outbox, and its handler emails (or texts) the user based on their preferences. Emails only go to a verified address, mask account IDs and never include the transfer reference. Mail is skipped if the notification was read in the meantime, and replaced by a push if the user has come online.
 
+### Analytics
+
+| Method | Path | Description | Access |
+|---|---|---|---|
+| `GET` | `/analytics/summary` | Per currency: incoming, outgoing, internal (between own accounts), net, refused transfers. `accountId` narrows to one account, where internal moves count as incoming or outgoing. | Own transactions only |
+| `GET` | `/analytics/timeline` | Incoming, outgoing and net per `DAY`, `WEEK` or `MONTH` (`interval`), empty periods included. `currency` is required. | Own transactions only |
+| `GET` | `/analytics/counterparties` | Top accounts paid (`direction=OUTGOING`) or paid by (`INCOMING`), `limit` 1-20, default 5. Money from outside the bank shows as `EXTERNAL-<currency>`. | Own transactions only |
+| `GET` | `/analytics/overview` | Bank-wide per currency: transfers, deposits, refused transfers, active users (approximate). No per-customer figures. | **Admin only** |
+
+All take `from` and `to` as inclusive UTC days (`yyyy-MM-dd`), the last 30 days by default, at most 366 days. Amounts are decimals at the currency's scale. Errors: `INVALID_RANGE`, `RANGE_TOO_LONG`, `UNSUPPORTED_CURRENCY`, `INVALID_LIMIT` (422), and `ANALYTICS_UNAVAILABLE` (503) while Elasticsearch is down.
+
+**How it works.** The `TransactionCompleted` and `TransactionCancelled` events are projected into the `ebank-transactions` alias (index `ebank-transactions-v1`, strict mapping, separate from log indices). There is one document per transaction ID, so a redelivered event overwrites itself. Amounts are stored as `long` minor units (cents, satoshis), so sums are exact up to 2^53 minor units. Documents carry account IDs and user IDs, but never the free-text reference or any name or email. A user only matches documents listing them in `participants`, and a refused transfer only lists its sender. Figures are eventually consistent, about 1–2 s behind the ledger. Elasticsearch being down never blocks transfers or notifications: the analytics handler retries on its own.
+
+**Rebuilding.** The index is a projection. To rebuild it, delete it and replay the events still in the outbox (published events are kept 7 days). A full rebuild from the ledger would need an export API in `transactions`, which doesn't exist yet.
+
 ## Database
 
 Flyway owns the schema, and Hibernate only validates it (`ddl-auto: validate`).
@@ -464,10 +487,13 @@ Flyway owns the schema, and Hibernate only validates it (`ddl-auto: validate`).
 | `transfers` | `transactions` | Transfers, with unique `(initiated_by, idempotency_key)` |
 | `ledger_entries` | `transactions` | Debit and credit entries, unique per `(transfer_id, type)` |
 | `outbox_event` | `common` | Domain events waiting for delivery (`PENDING`), delivered (`PUBLISHED`, deleted after 7 days) or given up after 10 attempts (`FAILED`) |
+| `outbox_event_handled` | `common` | Which handlers already processed an event, so a retry only re-runs the ones that failed |
 | `notification` | `notifications` | One row per user and event, unique per `(source_event_id, user_id)` so a redelivered event never notifies twice |
 | `notification_preference` | `notifications` | Offline channels per user. No row means the defaults. |
 
-The outbox delivers **at least once**: handlers must be idempotent. Failed events are retried with exponential backoff (2 s, 4 s, ... up to 15 min). Rows are claimed with `FOR UPDATE SKIP LOCKED`, so several instances can run the relay. Only the exception type is stored in `last_error`, never its message.
+The outbox delivers **at least once**: handlers must be idempotent. Each handler runs in its own transaction, together with its row in `outbox_event_handled`, so handlers are independent. If analytics fails, notifications are still committed, and the retry only re-runs analytics. An event becomes `PUBLISHED` once all its handlers have succeeded. Failures are retried with exponential backoff (2 s, 4 s, ... up to 15 min). Events are claimed with `FOR UPDATE SKIP LOCKED` plus a 5-minute lease, so several instances can run the relay and no lock is held while handlers run. Only the exception type is stored in `last_error`, never its message.
+
+To retry an event marked `FAILED` after fixing the cause: `UPDATE outbox_event SET status = 'PENDING', attempts = 0, next_attempt_at = now() WHERE id = '...';`
 
 `transfers` and `ledger_entries` store account IDs as plain values with no foreign key to `accounts`, because modules don't reach into each other's tables.
 
@@ -525,7 +551,7 @@ Run these from `backend/`:
 |---|---|---|
 | Unit | `src/test` in each module | Domain rules and services |
 | Architecture | `ModuleBoundariesTest` in `ebank-app` | Module boundaries, see [Module boundaries](#module-boundaries) |
-| Integration | `AccountsIT`, `TransfersIT`, `NotificationsIT` in `ebank-app` | Full HTTP and STOMP requests against a real PostgreSQL through Testcontainers |
+| Integration | `AccountsIT`, `TransfersIT`, `NotificationsIT`, `AnalyticsIT`, `OutboxIT` in `ebank-app` | Full HTTP and STOMP requests against a real PostgreSQL through Testcontainers. `AnalyticsIT` also starts Elasticsearch. Other ITs run with `ebank.analytics.enabled=false`. |
 
 The integration tests include concurrency scenarios: simultaneous debits never overdraw an account, opposite transfers don't deadlock, and simultaneous retries with one key move money once. They replace Keycloak with a test JWT decoder, so the real Keycloak flow is not covered yet.
 
@@ -537,7 +563,10 @@ The integration tests include concurrency scenarios: simultaneous debits never o
 cd infra/compose && docker compose up -d --wait      # infrastructure
 cd backend/ebank-app && ../mvnw spring-boot:run      # backend, dev profile
 infra/scripts/test-notifications.sh                  # needs curl, jq, node 22+
+infra/scripts/test-analytics.sh                      # 41 checks; stops Elasticsearch once (SKIP_OUTAGE=1 to skip)
 ```
+
+[test-analytics.sh](infra/scripts/test-analytics.sh) books a deposit, a transfer, an internal move, a refused transfer and an incoming transfer. It then checks every analytics endpoint from both users' points of view and inspects the documents in Elasticsearch. Finally it stops Elasticsearch: analytics return 503 while transfers and notifications keep working, and the index catches up once Elasticsearch is back. Both scripts share [lib.sh](infra/scripts/lib.sh).
 
 It creates new users on every run and, in your local Keycloak only, a public `ebank-cli` client with the password grant so curl can get tokens. That client is never in the versioned realm. Its direct grant skips the browser flow, including TOTP.
 
@@ -563,7 +592,7 @@ npm run build               # Production build, enforces bundle size budgets
 | Signal | How |
 |---|---|
 | Health | `/actuator/health/liveness` and `/actuator/health/readiness` |
-| Metrics | `/actuator/prometheus`, with HTTP latency histograms, `ebank_security_rejections_total{status="401"\|"403"}`, `ebank_notifications_recorded_total{type}`, `ebank_notifications_delivered_total{channel,outcome}` and `ebank_websocket_sessions` |
+| Metrics | `/actuator/prometheus`, with HTTP latency histograms, `ebank_security_rejections_total{status="401"\|"403"}`, `ebank_notifications_recorded_total{type}`, `ebank_notifications_delivered_total{channel,outcome}`, `ebank_websocket_sessions` and `ebank_analytics_indexed_total{status}` |
 | Logs | Plain text in `dev`, ECS JSON on stdout in `qua` and `prod`, ready to ship to ELK |
 | Traces | OpenTelemetry over OTLP. Metrics and logs are deliberately not sent over OTLP. |
 
