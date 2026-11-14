@@ -1,70 +1,83 @@
 import { computed, effect, inject, Injectable, signal } from '@angular/core';
-import { forkJoin, Subscription, timer } from 'rxjs';
+import { Subscription } from 'rxjs';
 
 import { AuthService } from '../../core/auth/auth.service';
-import { Account, AccountsApi } from '../accounts/accounts-api';
-import { directionOf, TransactionsApi, Transfer } from '../transactions/transactions-api';
+import { RealtimeService } from '../../core/realtime/realtime.service';
+import { NotificationDto, NotificationsApi, NotificationType } from './notifications-api';
 
-export type NotificationKind = 'received' | 'sent' | 'internal' | 'cancelled';
+export type NotificationKind = 'received' | 'sent' | 'internal' | 'cancelled' | 'advisor';
 
 export interface AppNotification {
   id: string;
   kind: NotificationKind;
-  amount: number;
-  currency: string;
+  amount: number | null;
+  currency: string | null;
   /** The other account, when there is one. */
   counterparty: string | null;
+  /** The transfer, or the conversation for an advisor message. */
+  sourceId: string | null;
   createdAt: string;
   read: boolean;
 }
 
-const POLL_INTERVAL_MS = 30_000;
-const RECENT_TRANSFERS = 20;
-const ACCOUNTS_PAGE_SIZE = 100;
+export const PAGE_SIZE = 20;
+
+const KINDS: Record<NotificationType, NotificationKind> = {
+  TRANSFER_RECEIVED: 'received',
+  TRANSFER_SENT: 'sent',
+  TRANSFER_INTERNAL: 'internal',
+  TRANSFER_CANCELLED: 'cancelled',
+  ADVISOR_MESSAGE: 'advisor',
+};
 
 /**
- * The notifications backend does not exist yet, so these come from the user's recent transfers.
- * Read state is per browser. When the module ships, only this service needs to change.
+ * Notifications are stored by the backend: read state follows the user across browsers.
+ * New ones are pushed live over the shared STOMP connection; after a reconnect the list and the
+ * unread count are reloaded, since a push may have been missed.
  */
 @Injectable({ providedIn: 'root' })
 export class NotificationsService {
   private readonly auth = inject(AuthService);
-  private readonly accountsApi = inject(AccountsApi);
-  private readonly transactionsApi = inject(TransactionsApi);
+  private readonly api = inject(NotificationsApi);
+  private readonly realtime = inject(RealtimeService);
 
-  private readonly latest = signal<Omit<AppNotification, 'read'>[]>([]);
-  private readonly readIds = signal<Set<string>>(new Set());
-  private polling?: Subscription;
+  private live?: Subscription;
+  private readonly unread = signal(0);
 
+  readonly items = signal<AppNotification[]>([]);
+  readonly page = signal(0);
+  readonly totalPages = signal(0);
   readonly loaded = signal(false);
   readonly failed = signal(false);
-  readonly items = computed<AppNotification[]>(() =>
-    this.latest().map((item) => ({ ...item, read: this.readIds().has(item.id) })),
-  );
-  readonly unreadCount = computed(() => this.items().filter((item) => !item.read).length);
+  readonly unreadCount = this.unread.asReadonly();
+  readonly hasUnread = computed(() => this.unread() > 0);
 
   constructor() {
     effect(() => {
-      const userId = this.auth.user()?.id;
-      this.readIds.set(userId ? readStored(userId) : new Set());
-    });
-  }
-
-  start(): void {
-    this.polling ??= timer(0, POLL_INTERVAL_MS).subscribe(() => {
-      if (!document.hidden) {
-        this.refresh();
+      if (!this.auth.user()) {
+        this.stop();
       }
     });
   }
 
-  refresh(): void {
-    forkJoin({
-      accounts: this.accountsApi.list(0, ACCOUNTS_PAGE_SIZE),
-      transfers: this.transactionsApi.search({ size: RECENT_TRANSFERS }),
-    }).subscribe({
-      next: ({ accounts, transfers }) => {
-        this.latest.set(toNotifications(transfers.items, accounts.items, this.auth.user()?.id));
+  /** Called once by the shell: live updates and the badge for the whole session. */
+  start(): void {
+    if (this.live) {
+      return;
+    }
+    this.live = this.realtime
+      .watch<NotificationDto>('/user/queue/notifications')
+      .subscribe((dto) => this.received(toNotification(dto)));
+    this.live.add(this.realtime.reconnected$.subscribe(() => this.refresh()));
+    this.refreshCount();
+  }
+
+  refresh(page = this.page()): void {
+    this.api.list(page, PAGE_SIZE).subscribe({
+      next: (result) => {
+        this.items.set(result.items.map(toNotification));
+        this.page.set(result.page);
+        this.totalPages.set(result.totalPages);
         this.failed.set(false);
         this.loaded.set(true);
       },
@@ -73,77 +86,77 @@ export class NotificationsService {
         this.loaded.set(true);
       },
     });
+    this.refreshCount();
   }
 
   markRead(id: string): void {
-    this.saveRead(new Set([...this.readIds(), id]));
+    const item = this.items().find((n) => n.id === id);
+    if (!item || item.read) {
+      return;
+    }
+    this.setRead(id, true);
+    this.unread.update((n) => Math.max(0, n - 1));
+    this.api.markRead(id).subscribe({
+      error: () => {
+        this.setRead(id, false);
+        this.refreshCount();
+      },
+    });
   }
 
   markAllRead(): void {
-    // Only what is listed is kept: older ids can never come back into the recent window.
-    this.saveRead(new Set(this.latest().map((item) => item.id)));
+    const before = this.items();
+    this.items.update((list) => list.map((n) => ({ ...n, read: true })));
+    this.unread.set(0);
+    this.api.markAllRead().subscribe({
+      error: () => {
+        this.items.set(before);
+        this.refreshCount();
+      },
+    });
   }
 
-  private saveRead(ids: Set<string>): void {
-    this.readIds.set(ids);
-    const userId = this.auth.user()?.id;
-    if (!userId) {
+  private received(notification: AppNotification): void {
+    if (this.items().some((n) => n.id === notification.id)) {
       return;
     }
-    try {
-      localStorage.setItem(storageKey(userId), JSON.stringify([...ids]));
-    } catch {
-      // Storage can be blocked. Read state then lasts until the next reload.
+    // Only the first page shows the newest ones; other pages keep their position.
+    if (this.page() === 0 && this.loaded()) {
+      this.items.update((list) => [notification, ...list].slice(0, PAGE_SIZE));
     }
+    if (!notification.read) {
+      this.unread.update((n) => n + 1);
+    }
+  }
+
+  private refreshCount(): void {
+    this.api
+      .unreadCount()
+      .subscribe({ next: ({ count }) => this.unread.set(count), error: () => undefined });
+  }
+
+  private setRead(id: string, read: boolean): void {
+    this.items.update((list) => list.map((n) => (n.id === id ? { ...n, read } : n)));
+  }
+
+  private stop(): void {
+    this.live?.unsubscribe();
+    this.live = undefined;
+    this.items.set([]);
+    this.unread.set(0);
+    this.loaded.set(false);
   }
 }
 
-export function toNotifications(
-  transfers: Transfer[],
-  accounts: Account[],
-  userId: string | undefined,
-): Omit<AppNotification, 'read'>[] {
-  const own = new Set(accounts.filter((a) => a.userId === userId).map((a) => a.accountId));
-  return transfers.flatMap((transfer) => {
-    const direction = directionOf(transfer, own);
-    if (transfer.status === 'PENDING' || direction === 'other') {
-      return [];
-    }
-    const kind: NotificationKind =
-      transfer.status === 'CANCELLED'
-        ? 'cancelled'
-        : direction === 'in'
-          ? 'received'
-          : direction === 'out'
-            ? 'sent'
-            : 'internal';
-    return [
-      {
-        id: transfer.transactionId,
-        kind,
-        amount: transfer.amount,
-        currency: transfer.currency,
-        counterparty:
-          direction === 'in'
-            ? transfer.senderAccountId
-            : direction === 'out'
-              ? transfer.receiverAccountId
-              : null,
-        createdAt: transfer.createdAt,
-      },
-    ];
-  });
-}
-
-function storageKey(userId: string): string {
-  return `ebank.notifications.read.${userId}`;
-}
-
-function readStored(userId: string): Set<string> {
-  try {
-    const ids: unknown = JSON.parse(localStorage.getItem(storageKey(userId)) ?? '[]');
-    return new Set(Array.isArray(ids) ? ids.filter((id) => typeof id === 'string') : []);
-  } catch {
-    return new Set();
-  }
+export function toNotification(dto: NotificationDto): AppNotification {
+  return {
+    id: dto.id,
+    kind: KINDS[dto.type] ?? 'received',
+    amount: dto.amount,
+    currency: dto.currency,
+    counterparty: dto.counterparty,
+    sourceId: dto.transactionId,
+    createdAt: dto.createdAt,
+    read: dto.read,
+  };
 }

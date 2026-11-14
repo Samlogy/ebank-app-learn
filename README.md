@@ -34,9 +34,10 @@ This README describes how the project works today. For the design rationale and 
 | `ebank-analytics` | Implemented and tested: transaction events projected into Elasticsearch, per-user summary, timeline and counterparties, admin overview |
 | Transactional outbox | Implemented in `ebank-common`, delivered by an in-process relay (no broker yet). Each handler succeeds or fails on its own. |
 | Front end: sign-in, accounts, transactions, profile, theming | Implemented against the real API |
-| Front end: notifications | Works, but still derived in the browser from recent transfers: not yet switched to the new API |
-| Front end: chatbot | UI only, uses a simulated transport (`DemoChatTransport`) |
-| Front end: analytics | Placeholder page: not yet connected to the new API |
+| Front end: notifications | On the notifications API, pushed live over STOMP, read state stored by the backend, email and SMS preferences |
+| Front end: chat | On the chat API and STOMP: assistant, handoff, read receipts. Advisor console at `/advisor`. Text only until attachments exist in the backend (phase 8c). |
+| Front end: analytics | On the analytics API: summary, in and out chart, top counterparties, bank overview for admins |
+| Front end: configuration | Read at startup from `/config.json`, rendered per environment by nginx, so one image runs everywhere |
 | `ebank-chatbot` | Implemented and tested (phases 7 and 8b): Claude assistant with read-only tools, advisor handoff, queue, live text chat, read receipts |
 | `ebank-realtime` | The one STOMP connection per user, shared by notifications and chat |
 | Chat files, audio messages, 1:1 calls (phases 8c and 8d) | Not implemented: no MinIO, ClamAV, coturn or WebRTC signaling yet |
@@ -580,16 +581,18 @@ front-web/src/app/
 | `/transactions` | Transfers and search | Signed in |
 | `/notifications` | Notifications | Signed in |
 | `/profile` | Profile, with a link to the Keycloak account console | Signed in |
-| `/chatbot` | Chatbot (simulated) | Signed in |
-| `/analytics` | Placeholder | Signed in |
+| `/chatbot` | Chat with the assistant, then an advisor | Signed in |
+| `/advisor` | Advisor console: queue, assigned conversations, replies | `ADVISOR` role |
+| `/analytics` | Money in and out, chart, counterparties; bank overview for admins | Signed in |
 
 Implementation notes:
 
 - **Tokens:** `authInterceptor` only attaches the token to requests under `apiUrl`, so it can't leak to another origin. It refreshes tokens that have under 30 seconds left.
 - **Keycloak outages:** the app still starts and shows the sign-in page if Keycloak is unreachable.
-- **Notifications:** `NotificationsService` polls recent transfers every 30 seconds and keeps read state per browser. Only this service should need to change when the backend module exists.
-- **Chatbot:** to connect a real backend, replace the `ChatTransport` provider in [app.config.ts](front-web/src/app/app.config.ts).
-- **Environments:** [environment.ts](front-web/src/environments/environment.ts) hard-codes the `localhost` API and Keycloak URLs, and there are no per-environment file replacements yet. A deployment outside local development needs these added first.
+- **Runtime configuration:** [main.ts](front-web/src/main.ts) loads `/config.json` (`apiUrl`, `wsUrl`, `keycloak.url`, `keycloak.realm`, `keycloak.clientId`) before Angular starts, and services read it through the `APP_CONFIG` token. `ng serve` uses [public/config.json](front-web/public/config.json). In the image, nginx renders it from [config.json.template](infra/docker/front-web/templates/config.json.template) and the `EBANK_*` variables, which also feed the CSP. Everything in it reaches the browser: never put a secret there.
+- **Realtime:** [RealtimeService](front-web/src/app/core/realtime/realtime.service.ts) keeps the one STOMP connection per user (`@stomp/stompjs`). The token goes in the `CONNECT` frame, a fresh one is sent to `/app/token` every minute, and it reconnects every 5 s after a drop. Features call `watch('/user/queue/...')` and reload through REST after a reconnect, because pushes are best effort.
+- **Notifications:** subscribed for the whole session, so the bell badge is live everywhere.
+- **Chat presence:** the chat and the advisor console only subscribe to `/user/queue/chat` while they are on screen. That is what the backend counts as "in the chat" (customers) or "online" (advisors): an advisor who closes the console stops receiving new conversations, and a customer who left gets a notification for the advisor's reply.
 
 ## Testing
 
@@ -642,7 +645,18 @@ Run these from `front-web/`:
 npx ng test --watch=false   # Single run with Vitest
 npm test                    # Watch mode
 npm run build               # Production build, enforces bundle size budgets
+npm run e2e                 # Playwright, against the running local stack (see below)
 ```
+
+[Playwright](front-web/playwright.config.ts) runs three journeys in Chromium against the real Keycloak, backend and front end:
+
+| Test | Checks |
+|---|---|
+| [accounts.spec.ts](front-web/e2e/accounts.spec.ts) | Sign-in through the Keycloak page (PKCE), the funded account and its analytics, and no CSP violation in the console |
+| [notifications.spec.ts](front-web/e2e/notifications.spec.ts) | A transfer received while the app is open bumps the bell live, and "mark all as read" sticks after a reload |
+| [chat.spec.ts](front-web/e2e/chat.spec.ts) | The assistant answers a balance question, the customer asks for an advisor, the online advisor gets it, replies, sees "Seen", and resolves |
+
+The tests create their own users through the Keycloak Admin API, plus the dev-only `ebank-cli` client for API calls. The advisor signs in through the browser with TOTP: the test sets up the authenticator from the secret Keycloak shows, then computes the codes. Without `E2E_BASE_URL` the config starts `ng serve`, which sends no security headers. To test the real image and its CSP, run the `front-web` container on port 4200 and set `E2E_BASE_URL=http://localhost:4200`. The browser comes from `npx playwright install chromium`.
 
 ## Observability
 
@@ -722,7 +736,7 @@ Resource names are fixed (`backend`, `postgres`, `keycloak`...) because the back
 - **Backend: management port.** Probes and Prometheus use port 8081, which the ingress never routes. `NetworkPolicy` lets only Traefik reach 8080 and only the `monitoring` namespace reach 8081.
 - **Pod hardening.** Every pod runs non-root, without privilege escalation, with all capabilities dropped and the `RuntimeDefault` seccomp profile. Root filesystems are read-only except Keycloak's and the dev Elasticsearch's. Service links are off: the `redis` Service would otherwise inject `REDIS_PORT=tcp://...`, which Spring reads as its port.
 - **TLS.** prod gets certificates from cert-manager (`letsencrypt-prod` ClusterIssuer, installed separately).
-- **Front end, known limitation.** The image is built with `environment.ts` (localhost URLs), so it needs a per-environment build or runtime configuration before it works behind the ingress.
+- **Front end configuration.** The chart sets `EBANK_API_ORIGIN`, `EBANK_WS_ORIGIN` and `EBANK_AUTH_ORIGIN` from `hosts.*`, so `/config.json` and the CSP match each environment with the same image.
 
 ## CI/CD and security scans
 

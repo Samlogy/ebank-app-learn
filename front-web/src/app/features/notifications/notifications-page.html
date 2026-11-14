@@ -1,7 +1,7 @@
 <div class="page">
   <div class="page-header">
     <h1>Notifications</h1>
-    @if (service.unreadCount()) {
+    @if (service.hasUnread()) {
       <button class="btn" type="button" (click)="service.markAllRead()">
         <app-icon name="check" /> Mark all as read
       </button>
@@ -25,27 +25,32 @@
       <p>Activity on your accounts will show up here.</p>
     </section>
   } @else {
-    <ul class="card list">
+    <ul class="card list" aria-label="Notifications">
       @for (item of service.items(); track item.id) {
         @let look = presentation[item.kind];
+        @let target = link(item);
         <li [class.unread]="!item.read">
           <a
-            routerLink="/transactions"
-            [queryParams]="{ transactionId: item.id }"
+            [routerLink]="target.path"
+            [queryParams]="target.query"
             (click)="service.markRead(item.id)"
           >
             <span class="glyph {{ look.tone }}"><app-icon [name]="look.icon" /></span>
             <span class="text">
               <strong>{{ look.title }}</strong>
-              <span class="tabular">
-                {{ item.amount | money: item.currency }}
-                @if (item.counterparty) {
-                  <span class="muted">
-                    {{ item.kind === 'received' ? 'from' : 'to' }}
-                    <span class="mono">{{ item.counterparty }}</span>
-                  </span>
-                }
-              </span>
+              @if (item.amount !== null && item.currency) {
+                <span class="tabular">
+                  {{ item.amount | money: item.currency }}
+                  @if (item.counterparty) {
+                    <span class="muted">
+                      {{ item.kind === 'received' ? 'from' : 'to' }}
+                      <span class="mono">{{ item.counterparty }}</span>
+                    </span>
+                  }
+                </span>
+              } @else if (item.kind === 'advisor') {
+                <span class="muted">Open the chat to read it.</span>
+              }
               <span class="muted small">{{ item.createdAt | localDate }}</span>
             </span>
             @if (!item.read) {
@@ -55,5 +60,41 @@
         </li>
       }
     </ul>
+    <app-pager
+      [page]="service.page()"
+      [totalPages]="service.totalPages()"
+      (pageChange)="service.refresh($event)"
+    />
   }
+
+  <section class="card preferences" aria-labelledby="preferences-title">
+    <h2 id="preferences-title">When you are away</h2>
+    <p class="muted small">
+      While the app is open you are told straight away. Otherwise we can send you a message. Emails
+      never include the transfer reference, and account numbers are masked.
+    </p>
+    @if (preferences(); as prefs) {
+      <label class="switch">
+        <input
+          type="checkbox"
+          [checked]="prefs.emailEnabled"
+          [disabled]="savingPreferences()"
+          (change)="toggle('emailEnabled', $any($event.target).checked)"
+        />
+        Email me
+      </label>
+      <label class="switch">
+        <input
+          type="checkbox"
+          [checked]="prefs.smsEnabled"
+          [disabled]="savingPreferences()"
+          (change)="toggle('smsEnabled', $any($event.target).checked)"
+        />
+        Text me (SMS)
+      </label>
+    }
+    @if (preferencesError()) {
+      <div class="alert" role="alert">{{ preferencesError() }}</div>
+    }
+  </section>
 </div>

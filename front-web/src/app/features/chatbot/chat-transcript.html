@@ -1,0 +1,57 @@
+<div class="log" #log role="log" aria-label="Conversation" aria-live="polite" tabindex="0">
+  @if (messages().length === 0) {
+    <div class="empty">
+      <app-icon name="chat" />
+      <h2>{{ emptyTitle() }}</h2>
+      @if (emptyText()) {
+        <p>{{ emptyText() }}</p>
+      }
+    </div>
+  }
+
+  @for (message of messages(); track message.id) {
+    @if (message.senderType === 'SYSTEM') {
+      <p class="system" role="note">{{ message.content }}</p>
+    } @else {
+      @let own = message.senderType === mine();
+      <div class="message" [class.mine]="own" [attr.data-sender]="message.senderType">
+        <div class="bubble" [class.deleted]="message.deleted">
+          @if (!own) {
+            <span class="sender small">{{ labels[message.senderType] }}</span>
+          }
+          @if (message.deleted) {
+            <p class="text muted">Message deleted</p>
+          } @else {
+            <p class="text">{{ message.content }}</p>
+          }
+          <span class="meta">
+            @if (own && canDelete() && !message.deleted) {
+              <button
+                class="link-btn small"
+                type="button"
+                [attr.aria-label]="'Delete message: ' + message.content"
+                (click)="deleteMessage.emit(message)"
+              >
+                Delete
+              </button>
+            }
+            <time class="time" [attr.datetime]="message.createdAt">
+              {{ message.createdAt | localDate: 'time' }}
+            </time>
+          </span>
+        </div>
+      </div>
+      @if (message.seq === seenSeq()) {
+        <span class="seen small muted">Seen</span>
+      }
+    }
+  }
+
+  @if (typing()) {
+    <div class="message">
+      <div class="bubble typing" role="status" aria-label="Assistant is typing">
+        <span></span><span></span><span></span>
+      </div>
+    </div>
+  }
+</div>

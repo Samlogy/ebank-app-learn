@@ -17,9 +17,12 @@ COPY --from=build /workspace/dist/ebank-web/browser/ /usr/share/nginx/html/
 USER 101
 EXPOSE 8080
 # The entrypoint renders /etc/nginx/templates/*.template into /tmp/nginx on every start.
-# The defaults match local development; compose and the Helm chart set them per environment.
+# They give /config.json and the CSP origins. The defaults match local development; compose and
+# the Helm chart set them per environment.
 ENV NGINX_ENVSUBST_OUTPUT_DIR=/tmp/nginx \
     NGINX_ENVSUBST_FILTER=^EBANK_ \
     EBANK_API_ORIGIN=http://localhost:8080 \
     EBANK_WS_ORIGIN=ws://localhost:8080 \
-    EBANK_AUTH_ORIGIN=http://localhost:8180
+    EBANK_AUTH_ORIGIN=http://localhost:8180 \
+    EBANK_KEYCLOAK_REALM=ebank \
+    EBANK_KEYCLOAK_CLIENT_ID=ebank-web

@@ -26,12 +26,19 @@ export class Shell implements OnInit {
   protected readonly auth = inject(AuthService);
   private readonly notifications = inject(NotificationsService);
 
-  protected readonly nav: NavItem[] = [
+  private readonly customerNav: NavItem[] = [
     { path: '/account', label: 'Accounts', icon: 'wallet' },
     { path: '/transactions', label: 'Transactions', icon: 'transfer' },
     { path: '/analytics', label: 'Analytics', icon: 'chart' },
     { path: '/chatbot', label: 'Chatbot', icon: 'chat' },
   ];
+
+  /** Advisors answer customers: their console comes first. They have no banking data of their own to show. */
+  protected readonly nav = computed<NavItem[]>(() =>
+    this.auth.isAdvisor()
+      ? [{ path: '/advisor', label: 'Advisor', icon: 'chat' }, ...this.customerNav]
+      : this.customerNav,
+  );
 
   protected readonly unread = this.notifications.unreadCount;
   protected readonly unreadLabel = computed(() =>

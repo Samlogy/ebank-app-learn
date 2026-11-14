@@ -1,0 +1,119 @@
+<div class="console">
+  <aside class="lists" aria-label="Conversations">
+    <p class="presence small">
+      @if (realtime.connected()) {
+        <span class="dot online" aria-hidden="true"></span> Online: new conversations come to you
+      } @else {
+        <span class="dot" aria-hidden="true"></span> Offline: reconnecting…
+      }
+    </p>
+
+    <h2>
+      Waiting <span class="count tabular">{{ advisor.queue().length }}</span>
+    </h2>
+    @if (advisor.loaded() && advisor.queue().length === 0) {
+      <p class="muted small">Nobody is waiting.</p>
+    }
+    <ul data-testid="advisor-queue">
+      @for (item of advisor.queue(); track item.id) {
+        <li>
+          <button
+            type="button"
+            [class.active]="advisor.selected()?.id === item.id"
+            (click)="advisor.select(item)"
+          >
+            <strong>{{ customer(item) }}</strong>
+            <span class="muted small"
+              >{{ reason(item) }}
+              @if (item.handoffAt) {
+                · {{ item.handoffAt | localDate: 'time' }}
+              }
+            </span>
+            @if (item.summary) {
+              <span class="summary small">{{ item.summary }}</span>
+            }
+          </button>
+        </li>
+      }
+    </ul>
+
+    <h2>
+      Mine <span class="count tabular">{{ advisor.mine().length }}</span>
+    </h2>
+    @if (advisor.loaded() && advisor.mine().length === 0) {
+      <p class="muted small">No conversation assigned to you.</p>
+    }
+    <ul data-testid="advisor-mine">
+      @for (item of advisor.mine(); track item.id) {
+        <li>
+          <button
+            type="button"
+            [class.active]="advisor.selected()?.id === item.id"
+            (click)="advisor.select(item)"
+          >
+            <strong>{{ customer(item) }}</strong>
+            <span class="muted small">{{
+              item.state === 'RESOLVED' ? 'Closed' : 'In progress'
+            }}</span>
+          </button>
+        </li>
+      }
+    </ul>
+  </aside>
+
+  <section class="conversation" aria-label="Selected conversation">
+    @if (advisor.selected(); as selected) {
+      <header>
+        <div>
+          <h1>{{ customer(selected) }}</h1>
+          <p class="muted small">{{ reason(selected) }}</p>
+        </div>
+        <div class="actions">
+          @if (selected.state === 'WAITING_ADVISOR') {
+            <button class="btn primary small-btn" type="button" (click)="advisor.claim()">
+              Take this conversation
+            </button>
+          }
+          @if (advisor.canWrite()) {
+            <button class="btn small-btn" type="button" (click)="advisor.resolve()">Resolve</button>
+          }
+        </div>
+      </header>
+      @if (selected.summary) {
+        <p class="assistant-summary small">
+          <strong>Assistant summary:</strong> {{ selected.summary }}
+        </p>
+      }
+
+      <app-chat-transcript
+        [messages]="advisor.messages()"
+        mine="ADVISOR"
+        [readByOther]="advisor.readByCustomer()"
+        emptyTitle="No messages yet"
+      />
+
+      <div class="composer">
+        @if (advisor.error()) {
+          <div class="alert" role="alert">{{ advisor.error() }}</div>
+        }
+        <app-chat-composer
+          [disabled]="!advisor.canWrite()"
+          [placeholder]="
+            advisor.canWrite() ? 'Reply to the customer' : 'Take the conversation to reply'
+          "
+          (send)="advisor.send($event)"
+        />
+      </div>
+    } @else {
+      <div class="none">
+        <h1>Advisor console</h1>
+        <p class="muted">
+          Pick a conversation on the left. Waiting ones show the assistant's summary.
+        </p>
+        @if (advisor.error()) {
+          <div class="alert" role="alert">{{ advisor.error() }}</div>
+        }
+      </div>
+    }
+  </section>
+</div>

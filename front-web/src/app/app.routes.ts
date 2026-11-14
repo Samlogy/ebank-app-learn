@@ -1,6 +1,6 @@
 import { Routes } from '@angular/router';
 
-import { authGuard, guestGuard } from './core/auth/auth.guards';
+import { authGuard, guestGuard, roleGuard } from './core/auth/auth.guards';
 import { Shell } from './core/layout/shell';
 
 export const routes: Routes = [
@@ -38,6 +38,12 @@ export const routes: Routes = [
         path: 'chatbot',
         title: 'Chatbot',
         loadComponent: () => import('./features/chatbot/chatbot-page').then((m) => m.ChatbotPage),
+      },
+      {
+        path: 'advisor',
+        title: 'Advisor console',
+        canActivate: [roleGuard('ADVISOR')],
+        loadComponent: () => import('./features/advisor/advisor-page').then((m) => m.AdvisorPage),
       },
       {
         path: 'profile',

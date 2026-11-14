@@ -367,6 +367,14 @@ dialog.modal::backdrop {
   height: 100%;
 }
 
+/* Shown by main.ts when /config.json cannot be loaded, before Angular starts. */
+.startup-error {
+  max-width: 28rem;
+  margin: 20vh auto 0;
+  padding: 0 1rem;
+  text-align: center;
+}
+
 .spinner {
   width: 1.75rem;
   height: 1.75rem;

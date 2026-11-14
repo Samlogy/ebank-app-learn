@@ -11,8 +11,6 @@ import { routes } from './app.routes';
 import { authInterceptor } from './core/auth/auth.interceptor';
 import { AuthService } from './core/auth/auth.service';
 import { EbankTitleStrategy } from './core/layout/title-strategy';
-import { ChatTransport } from './features/chatbot/chat-transport';
-import { DemoChatTransport } from './features/chatbot/demo-chat-transport';
 
 export const appConfig: ApplicationConfig = {
   providers: [
@@ -21,7 +19,5 @@ export const appConfig: ApplicationConfig = {
     provideHttpClient(withInterceptors([authInterceptor])),
     provideAppInitializer(() => inject(AuthService).init()),
     { provide: TitleStrategy, useClass: EbankTitleStrategy },
-    // Swap this for a WebSocket implementation once the backend chatbot module exists.
-    { provide: ChatTransport, useClass: DemoChatTransport },
   ],
 };

@@ -2,7 +2,7 @@ import { HttpClient, HttpHeaders } from '@angular/common/http';
 import { inject, Injectable } from '@angular/core';
 import { Observable } from 'rxjs';
 
-import { environment } from '../../../environments/environment';
+import { APP_CONFIG } from '../../core/config/app-config';
 import { Page } from '../../shared/models/page';
 
 export type TransferStatus = 'PENDING' | 'DONE' | 'CANCELLED';
@@ -39,7 +39,7 @@ export interface TransferSearch {
 @Injectable({ providedIn: 'root' })
 export class TransactionsApi {
   private readonly http = inject(HttpClient);
-  private readonly url = `${environment.apiUrl}/transactions`;
+  private readonly url = `${inject(APP_CONFIG).apiUrl}/transactions`;
 
   search(search: TransferSearch = {}): Observable<Page<Transfer>> {
     const params = Object.fromEntries(

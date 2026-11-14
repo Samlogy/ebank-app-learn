@@ -1,101 +1,61 @@
 import {
-  afterRenderEffect,
   ChangeDetectionStrategy,
   Component,
   computed,
-  ElementRef,
+  effect,
   inject,
-  signal,
-  viewChild,
+  OnDestroy,
+  OnInit,
 } from '@angular/core';
 
+import { RealtimeService } from '../../core/realtime/realtime.service';
 import { Icon } from '../../shared/components/icon';
-import { LocalDatePipe } from '../../shared/pipes/local-date.pipe';
-import { formatBytes, MAX_ATTACHMENT_BYTES, ChatService, toAttachment } from './chat.service';
-import { ChatAttachment } from './chat-transport';
-import { MediaRecorderService, RecordingMode } from './media-recorder.service';
+import { ConversationState } from './chat-api';
+import { ChatComposer } from './chat-composer';
+import { ChatTranscript } from './chat-transcript';
+import { ChatService } from './chat.service';
+
+const STATUS: Record<ConversationState, string> = {
+  BOT: 'Assistant · ask about your accounts, balance or recent transfers',
+  WAITING_ADVISOR: 'Waiting for an advisor · you can keep writing',
+  WITH_ADVISOR: 'With an advisor',
+  RESOLVED: 'Conversation closed',
+};
 
 @Component({
   selector: 'app-chatbot-page',
-  imports: [Icon, LocalDatePipe],
-  providers: [MediaRecorderService],
+  imports: [Icon, ChatTranscript, ChatComposer],
   templateUrl: './chatbot-page.html',
   styleUrl: './chatbot-page.scss',
   changeDetection: ChangeDetectionStrategy.OnPush,
 })
-export class ChatbotPage {
+export class ChatbotPage implements OnInit, OnDestroy {
   protected readonly chat = inject(ChatService);
-  protected readonly recorder = inject(MediaRecorderService);
-  private readonly log = viewChild.required<ElementRef<HTMLElement>>('log');
+  protected readonly realtime = inject(RealtimeService);
 
-  protected readonly text = signal('');
-  protected readonly pending = signal<ChatAttachment[]>([]);
-  protected readonly error = signal('');
-  protected readonly canSend = computed(() => !!this.text().trim() || this.pending().length > 0);
-  protected readonly formatBytes = formatBytes;
+  protected readonly status = computed(() => {
+    const state = this.chat.state();
+    return state ? STATUS[state] : 'Connecting…';
+  });
+  protected readonly title = computed(() =>
+    this.chat.state() === 'WITH_ADVISOR' ? 'EBANK Advisor' : 'EBANK Assistant',
+  );
 
   constructor() {
-    afterRenderEffect(() => {
+    // The page is on screen: whatever arrives has been seen.
+    effect(() => {
       this.chat.messages();
-      this.chat.botTyping();
-      this.scrollToEnd();
+      if (!document.hidden) {
+        this.chat.markRead();
+      }
     });
   }
 
-  protected scrollToEnd(): void {
-    const log = this.log().nativeElement;
-    log.scrollTop = log.scrollHeight;
+  ngOnInit(): void {
+    this.chat.enter();
   }
 
-  protected onFilesPicked(input: HTMLInputElement): void {
-    const files = Array.from(input.files ?? []);
-    input.value = ''; // Otherwise picking the same file again does nothing.
-    const tooBig = files.filter((file) => file.size > MAX_ATTACHMENT_BYTES);
-    this.error.set(
-      tooBig.length
-        ? `${tooBig.map((file) => file.name).join(', ')}: files can be at most ${formatBytes(MAX_ATTACHMENT_BYTES)}.`
-        : '',
-    );
-    this.addPending(files.filter((file) => file.size <= MAX_ATTACHMENT_BYTES));
-  }
-
-  protected removePending(attachment: ChatAttachment): void {
-    URL.revokeObjectURL(attachment.url);
-    this.pending.update((list) => list.filter((item) => item.id !== attachment.id));
-  }
-
-  protected async record(mode: RecordingMode): Promise<void> {
-    this.error.set('');
-    try {
-      await this.recorder.start(mode, (file) => this.addPending([file]));
-    } catch (error) {
-      this.error.set((error as Error).message);
-    }
-  }
-
-  protected onEnter(event: Event): void {
-    const keyboard = event as KeyboardEvent;
-    if (!keyboard.shiftKey && !keyboard.isComposing) {
-      event.preventDefault();
-      this.send();
-    }
-  }
-
-  protected send(): void {
-    if (!this.canSend()) {
-      return;
-    }
-    this.chat.send(this.text().trim(), this.pending());
-    this.text.set('');
-    this.pending.set([]);
-    this.error.set('');
-  }
-
-  protected clock(seconds: number): string {
-    return `${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, '0')}`;
-  }
-
-  private addPending(files: File[]): void {
-    this.pending.update((list) => [...list, ...files.map(toAttachment)]);
+  ngOnDestroy(): void {
+    this.chat.leave();
   }
 }

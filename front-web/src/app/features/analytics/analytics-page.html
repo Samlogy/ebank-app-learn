@@ -1,0 +1,197 @@
+<div class="page">
+  <div class="page-header">
+    <h1>Analytics</h1>
+    <div class="filters">
+      <div class="segmented" role="group" aria-label="Period">
+        @for (option of ranges; track option) {
+          <button
+            type="button"
+            [class.active]="days() === option"
+            [attr.aria-pressed]="days() === option"
+            (click)="days.set(option)"
+          >
+            {{ option === 365 ? '1 year' : option + ' days' }}
+          </button>
+        }
+      </div>
+      <label class="field inline">
+        <span class="small muted">Account</span>
+        <select
+          [value]="accountId()"
+          (change)="accountId.set($any($event.target).value)"
+          aria-label="Account"
+        >
+          <option value="">All accounts</option>
+          @for (account of accounts(); track account.accountId) {
+            <option [value]="account.accountId">
+              …{{ account.accountId.slice(-4) }} · {{ account.currency }}
+            </option>
+          }
+        </select>
+      </label>
+      @if (currencies().length > 1) {
+        <label class="field inline">
+          <span class="small muted">Currency</span>
+          <select
+            [value]="currency()"
+            (change)="currency.set($any($event.target).value)"
+            aria-label="Currency"
+          >
+            @for (code of currencies(); track code) {
+              <option [value]="code">{{ code }}</option>
+            }
+          </select>
+        </label>
+      }
+    </div>
+  </div>
+
+  <p class="muted small">
+    {{ range().from | localDate: 'date' }} – {{ range().to | localDate: 'date' }} (UTC). Figures can
+    lag a couple of seconds behind your balance.
+  </p>
+
+  @if (error()) {
+    <div class="alert" role="alert">{{ error() }}</div>
+  }
+
+  @if (loading()) {
+    <div class="boot"><div class="spinner" role="status" aria-label="Loading analytics"></div></div>
+  } @else if (!selected()) {
+    <section class="card empty">
+      <app-icon name="chart" />
+      <h2>No activity in this period</h2>
+      <p>Money in and out of your accounts will show up here.</p>
+    </section>
+  } @else {
+    @let s = selected()!;
+    <section class="tiles" aria-label="Summary" data-testid="analytics-summary">
+      <div class="card tile">
+        <span class="muted small">Money in</span>
+        <strong class="tabular ok">{{ s.incoming.total | money: s.currency }}</strong>
+        <span class="muted small">{{ s.incoming.count }} transfer(s)</span>
+      </div>
+      <div class="card tile">
+        <span class="muted small">Money out</span>
+        <strong class="tabular bad">{{ s.outgoing.total | money: s.currency }}</strong>
+        <span class="muted small">{{ s.outgoing.count }} transfer(s)</span>
+      </div>
+      <div class="card tile">
+        <span class="muted small">Net</span>
+        <strong class="tabular">{{ s.net | money: s.currency }}</strong>
+        <span class="muted small"
+          >Moves between your accounts: {{ s.internal.total | money: s.currency }}</span
+        >
+      </div>
+      <div class="card tile">
+        <span class="muted small">Refused transfers</span>
+        <strong class="tabular">{{ s.cancelledCount }}</strong>
+        <span class="muted small">For example, not enough money</span>
+      </div>
+    </section>
+
+    <section class="card chart" aria-labelledby="chart-title">
+      <h2 id="chart-title">In and out per {{ timeline()?.interval ?? 'DAY' | lowercase }}</h2>
+      @if (bars().length) {
+        <svg
+          [attr.viewBox]="'0 0 ' + chartWidth + ' ' + chartHeight"
+          preserveAspectRatio="none"
+          role="img"
+          [attr.aria-label]="
+            'Money in and out per ' + (timeline()?.interval ?? 'DAY').toLowerCase()
+          "
+        >
+          <line
+            x1="0"
+            [attr.y1]="chartHeight / 2"
+            [attr.x2]="chartWidth"
+            [attr.y2]="chartHeight / 2"
+            class="axis"
+          />
+          @for (bar of bars(); track bar.start) {
+            <g>
+              <title>
+                {{ bar.start }}: in {{ bar.incoming | money: s.currency }}, out
+                {{ bar.outgoing | money: s.currency }}
+              </title>
+              <rect
+                class="in"
+                [attr.x]="bar.x"
+                [attr.y]="bar.inY"
+                [attr.width]="bar.width"
+                [attr.height]="bar.inHeight"
+              />
+              <rect
+                class="out"
+                [attr.x]="bar.x"
+                [attr.y]="bar.outY"
+                [attr.width]="bar.width"
+                [attr.height]="bar.outHeight"
+              />
+            </g>
+          }
+        </svg>
+        <p class="legend small muted">
+          <span class="key in"></span> Money in <span class="key out"></span> Money out
+        </p>
+      }
+    </section>
+
+    <div class="columns">
+      <section class="card list" aria-labelledby="out-title">
+        <h2 id="out-title">Who you paid most</h2>
+        @for (item of outgoing()?.items ?? []; track item.accountId) {
+          <p class="row">
+            <span class="mono">{{ label(item.accountId) }}</span
+            ><span class="tabular">{{ item.total | money: s.currency }}</span>
+          </p>
+        } @empty {
+          <p class="muted small">No payments in this period.</p>
+        }
+      </section>
+      <section class="card list" aria-labelledby="in-title">
+        <h2 id="in-title">Who paid you most</h2>
+        @for (item of incoming()?.items ?? []; track item.accountId) {
+          <p class="row">
+            <span class="mono">{{ label(item.accountId) }}</span
+            ><span class="tabular">{{ item.total | money: s.currency }}</span>
+          </p>
+        } @empty {
+          <p class="muted small">Nothing received in this period.</p>
+        }
+      </section>
+    </div>
+  }
+
+  @if (overview(); as o) {
+    <section class="card list" aria-labelledby="overview-title">
+      <h2 id="overview-title">Bank overview <span class="muted small">(admin)</span></h2>
+      <table>
+        <thead>
+          <tr>
+            <th>Currency</th>
+            <th>Transfers</th>
+            <th>Deposits</th>
+            <th>Refused</th>
+            <th>Active users</th>
+          </tr>
+        </thead>
+        <tbody>
+          @for (c of o.currencies; track c.currency) {
+            <tr>
+              <td>{{ c.currency }}</td>
+              <td class="tabular">
+                {{ c.transfers.total | money: c.currency }} ({{ c.transfers.count }})
+              </td>
+              <td class="tabular">
+                {{ c.deposits.total | money: c.currency }} ({{ c.deposits.count }})
+              </td>
+              <td class="tabular">{{ c.cancelled.count }}</td>
+              <td class="tabular">{{ c.activeUsers }}</td>
+            </tr>
+          }
+        </tbody>
+      </table>
+    </section>
+  }
+</div>

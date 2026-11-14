@@ -8,6 +8,15 @@ server {
 
     # add_header is not inherited by a location that has its own, so each location includes them.
 
+    # The runtime config, rendered from config.json.template with this container's EBANK_* values.
+    # It wins over the public/config.json that the build copies, which only serves `ng serve`.
+    location = /config.json {
+        include /tmp/nginx/security-headers.inc;
+        add_header Cache-Control "no-store" always;
+        default_type application/json;
+        alias /tmp/nginx/config.json;
+    }
+
     location = /index.html {
         include /tmp/nginx/security-headers.inc;
         add_header Cache-Control "no-store" always;

@@ -3,9 +3,11 @@ import { HttpTestingController, provideHttpClientTesting } from '@angular/common
 import { TestBed } from '@angular/core/testing';
 import { vi } from 'vitest';
 
-import { environment } from '../../../environments/environment';
+import { APP_CONFIG, AppConfig } from '../config/app-config';
 import { authInterceptor } from './auth.interceptor';
 import { AuthService } from './auth.service';
+
+const environment = { apiUrl: 'https://api.test/api/v1' } as AppConfig;
 
 describe('authInterceptor', () => {
   const auth = { accessToken: vi.fn(), recoverSession: vi.fn() };
@@ -20,6 +22,7 @@ describe('authInterceptor', () => {
         provideHttpClient(withInterceptors([authInterceptor])),
         provideHttpClientTesting(),
         { provide: AuthService, useValue: auth },
+        { provide: APP_CONFIG, useValue: environment },
       ],
     });
     http = TestBed.inject(HttpClient);

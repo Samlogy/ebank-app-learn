@@ -78,3 +78,31 @@ li:not(.unread) strong {
   border-radius: 50%;
   background: var(--accent);
 }
+
+app-pager {
+  display: block;
+  margin-top: 1rem;
+}
+
+.preferences {
+  display: grid;
+  gap: 0.6rem;
+  margin-top: 1.5rem;
+  padding: 1rem;
+
+  h2 {
+    margin: 0;
+    font-size: 1rem;
+  }
+
+  p {
+    margin: 0;
+  }
+}
+
+.switch {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  cursor: pointer;
+}

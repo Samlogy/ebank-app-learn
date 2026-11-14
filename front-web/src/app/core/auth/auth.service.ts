@@ -1,7 +1,7 @@
-import { computed, Injectable, signal } from '@angular/core';
+import { computed, inject, Injectable, signal } from '@angular/core';
 import Keycloak from 'keycloak-js';
 
-import { environment } from '../../../environments/environment';
+import { APP_CONFIG } from '../config/app-config';
 
 export interface AuthUser {
   id: string;
@@ -21,13 +21,15 @@ const SILENT_CHECK_TIMEOUT_MS = 4000;
  */
 @Injectable({ providedIn: 'root' })
 export class AuthService {
-  private readonly keycloak = new Keycloak(environment.keycloak);
+  private readonly config = inject(APP_CONFIG);
+  private readonly keycloak = new Keycloak(this.config.keycloak);
   private readonly currentUser = signal<AuthUser | null>(null);
   private recovering = false;
 
   readonly user = this.currentUser.asReadonly();
   readonly isAuthenticated = computed(() => this.currentUser() !== null);
   readonly isAdmin = computed(() => this.currentUser()?.roles.includes('ADMIN') ?? false);
+  readonly isAdvisor = computed(() => this.currentUser()?.roles.includes('ADVISOR') ?? false);
   /** False when Keycloak could not be reached, so the login page can say so. */
   readonly available = signal(true);
 
@@ -90,7 +92,7 @@ export class AuthService {
     }
     this.recovering = true;
     try {
-      const { url, realm } = environment.keycloak;
+      const { url, realm } = this.config.keycloak;
       await fetch(`${url}/realms/${realm}`, { mode: 'no-cors', cache: 'no-store' });
       await this.keycloak.login({ prompt: 'none', redirectUri: location.href });
     } catch {

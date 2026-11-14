@@ -2,7 +2,7 @@ import { HttpClient } from '@angular/common/http';
 import { inject, Injectable } from '@angular/core';
 import { Observable } from 'rxjs';
 
-import { environment } from '../../../environments/environment';
+import { APP_CONFIG } from '../../core/config/app-config';
 import { Page } from '../../shared/models/page';
 
 export type AccountType = 'SAVING' | 'CURRENT' | 'CRYPTO';
@@ -39,7 +39,7 @@ export interface Balance {
 @Injectable({ providedIn: 'root' })
 export class AccountsApi {
   private readonly http = inject(HttpClient);
-  private readonly url = `${environment.apiUrl}/accounts`;
+  private readonly url = `${inject(APP_CONFIG).apiUrl}/accounts`;
 
   list(page = 0, size = 20): Observable<Page<Account>> {
     return this.http.get<Page<Account>>(this.url, { params: { page, size } });

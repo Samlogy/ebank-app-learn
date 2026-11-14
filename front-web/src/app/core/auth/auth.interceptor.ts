@@ -2,12 +2,12 @@ import { HttpErrorResponse, HttpInterceptorFn } from '@angular/common/http';
 import { inject } from '@angular/core';
 import { catchError, from, switchMap, throwError } from 'rxjs';
 
-import { environment } from '../../../environments/environment';
+import { APP_CONFIG } from '../config/app-config';
 import { AuthService } from './auth.service';
 
 /** Only API calls get the token, so it can never leak to another origin. */
 export const authInterceptor: HttpInterceptorFn = (request, next) => {
-  if (!request.url.startsWith(`${environment.apiUrl}/`)) {
+  if (!request.url.startsWith(`${inject(APP_CONFIG).apiUrl}/`)) {
     return next(request);
   }
   const auth = inject(AuthService);
